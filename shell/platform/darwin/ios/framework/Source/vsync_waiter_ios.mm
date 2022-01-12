@@ -122,27 +122,28 @@ double VsyncWaiterIOS::GetRefreshRate() const {
 @implementation DisplayLinkManager
 
 + (double)displayRefreshRate {
-  if (@available(iOS 10.3, *)) {
-    fml::scoped_nsobject<CADisplayLink> display_link = fml::scoped_nsobject<CADisplayLink> {
-      [[CADisplayLink displayLinkWithTarget:[[[DisplayLinkManager alloc] init] autorelease]
-                                   selector:@selector(onDisplayLink:)] retain]
-    };
-    display_link.get().paused = YES;
-    auto preferredFPS = display_link.get().preferredFramesPerSecond;  // iOS 10.0
+    return 120;
+//   if (@available(iOS 10.3, *)) {
+//     fml::scoped_nsobject<CADisplayLink> display_link = fml::scoped_nsobject<CADisplayLink> {
+//       [[CADisplayLink displayLinkWithTarget:[[[DisplayLinkManager alloc] init] autorelease]
+//                                    selector:@selector(onDisplayLink:)] retain]
+//     };
+//     display_link.get().paused = YES;
+//     auto preferredFPS = display_link.get().preferredFramesPerSecond;  // iOS 10.0
 
-    // From Docs:
-    // The default value for preferredFramesPerSecond is 0. When this value is 0, the preferred
-    // frame rate is equal to the maximum refresh rate of the display, as indicated by the
-    // maximumFramesPerSecond property.
+//     // From Docs:
+//     // The default value for preferredFramesPerSecond is 0. When this value is 0, the preferred
+//     // frame rate is equal to the maximum refresh rate of the display, as indicated by the
+//     // maximumFramesPerSecond property.
 
-    if (preferredFPS != 0) {
-      return preferredFPS;
-    }
+//     if (preferredFPS != 0) {
+//       return preferredFPS;
+//     }
 
-    return [UIScreen mainScreen].maximumFramesPerSecond;  // iOS 10.3
-  } else {
-    return 60.0;
-  }
+//     return [UIScreen mainScreen].maximumFramesPerSecond;  // iOS 10.3
+//   } else {
+//     return 60.0;
+//   }
 }
 
 - (void)onDisplayLink:(CADisplayLink*)link {
