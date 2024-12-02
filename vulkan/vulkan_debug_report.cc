@@ -8,16 +8,17 @@
 #include <iomanip>
 #include <vector>
 
-#include "flutter/fml/compiler_specific.h"
 #include "vulkan_utilities.h"
 
 namespace vulkan {
 
-static const VkDebugReportFlagsEXT kVulkanErrorFlags FML_ALLOW_UNUSED_TYPE =
+[[maybe_unused]]
+static const VkDebugReportFlagsEXT kVulkanErrorFlags =
     VK_DEBUG_REPORT_WARNING_BIT_EXT |
     VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT | VK_DEBUG_REPORT_ERROR_BIT_EXT;
 
-static const VkDebugReportFlagsEXT kVulkanInfoFlags FML_ALLOW_UNUSED_TYPE =
+[[maybe_unused]]
+static const VkDebugReportFlagsEXT kVulkanInfoFlags =
     VK_DEBUG_REPORT_INFORMATION_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT;
 
 std::string VulkanDebugReport::DebugExtensionName() {
@@ -108,14 +109,17 @@ static const char* VkDebugReportObjectTypeEXTToString(
 }
 
 static VKAPI_ATTR VkBool32
-OnVulkanDebugReportCallback(VkDebugReportFlagsEXT flags,
-                            VkDebugReportObjectTypeEXT object_type,
-                            uint64_t object,
-                            size_t location,
-                            int32_t message_code,
-                            const char* layer_prefix,
-                            const char* message,
-                            void* user_data) {
+#ifdef WIN32
+    __stdcall
+#endif
+    OnVulkanDebugReportCallback(VkDebugReportFlagsEXT flags,
+                                VkDebugReportObjectTypeEXT object_type,
+                                uint64_t object,
+                                size_t location,
+                                int32_t message_code,
+                                const char* layer_prefix,
+                                const char* message,
+                                void* user_data) {
   std::vector<std::pair<std::string, std::string>> items;
 
   items.emplace_back("Severity", VkDebugReportFlagsEXTToString(flags));
@@ -182,8 +186,8 @@ OnVulkanDebugReportCallback(VkDebugReportFlagsEXT flags,
 VulkanDebugReport::VulkanDebugReport(
     const VulkanProcTable& p_vk,
     const VulkanHandle<VkInstance>& application)
-    : vk(p_vk), application_(application), valid_(false) {
-  if (!vk.CreateDebugReportCallbackEXT || !vk.DestroyDebugReportCallbackEXT) {
+    : vk_(p_vk), application_(application), valid_(false) {
+  if (!vk_.CreateDebugReportCallbackEXT || !vk_.DestroyDebugReportCallbackEXT) {
     return;
   }
 
@@ -204,14 +208,14 @@ VulkanDebugReport::VulkanDebugReport(
   };
 
   VkDebugReportCallbackEXT handle = VK_NULL_HANDLE;
-  if (VK_CALL_LOG_ERROR(vk.CreateDebugReportCallbackEXT(
+  if (VK_CALL_LOG_ERROR(vk_.CreateDebugReportCallbackEXT(
           application_, &create_info, nullptr, &handle)) != VK_SUCCESS) {
     return;
   }
 
   handle_ = VulkanHandle<VkDebugReportCallbackEXT>{
       handle, [this](VkDebugReportCallbackEXT handle) {
-        vk.DestroyDebugReportCallbackEXT(application_, handle, nullptr);
+        vk_.DestroyDebugReportCallbackEXT(application_, handle, nullptr);
       }};
 
   valid_ = true;

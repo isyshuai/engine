@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLOW_TESTING_MOCK_EMBEDDER_H_
-#define FLOW_TESTING_MOCK_EMBEDDER_H_
+#ifndef FLUTTER_FLOW_TESTING_MOCK_EMBEDDER_H_
+#define FLUTTER_FLOW_TESTING_MOCK_EMBEDDER_H_
 
 #include "flutter/flow/embedded_views.h"
 
@@ -16,32 +16,41 @@ class MockViewEmbedder : public ExternalViewEmbedder {
 
   ~MockViewEmbedder();
 
+  void AddCanvas(DlCanvas* canvas);
+
   // |ExternalViewEmbedder|
-  SkCanvas* GetRootCanvas() override;
+  DlCanvas* GetRootCanvas() override;
 
   // |ExternalViewEmbedder|
   void CancelFrame() override;
 
   // |ExternalViewEmbedder|
-  void BeginFrame(
-      SkISize frame_size,
-      GrDirectContext* context,
-      double device_pixel_ratio,
-      fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger) override;
+  void BeginFrame(GrDirectContext* context,
+                  const fml::RefPtr<fml::RasterThreadMerger>&
+                      raster_thread_merger) override;
+
+  // |ExternalViewEmbedder|
+  void PrepareFlutterView(SkISize frame_size,
+                          double device_pixel_ratio) override;
 
   // |ExternalViewEmbedder|
   void PrerollCompositeEmbeddedView(
-      int view_id,
+      int64_t view_id,
       std::unique_ptr<EmbeddedViewParams> params) override;
 
   // |ExternalViewEmbedder|
-  std::vector<SkCanvas*> GetCurrentCanvases() override;
+  DlCanvas* CompositeEmbeddedView(int64_t view_id) override;
 
-  // |ExternalViewEmbedder|
-  SkCanvas* CompositeEmbeddedView(int view_id) override;
+  std::vector<int64_t> prerolled_views() const { return prerolled_views_; }
+  std::vector<int64_t> painted_views() const { return painted_views_; }
+
+ private:
+  std::deque<DlCanvas*> contexts_;
+  std::vector<int64_t> prerolled_views_;
+  std::vector<int64_t> painted_views_;
 };
 
 }  // namespace testing
 }  // namespace flutter
 
-#endif  // FLOW_TESTING_MOCK_EMBEDDER_H_
+#endif  // FLUTTER_FLOW_TESTING_MOCK_EMBEDDER_H_

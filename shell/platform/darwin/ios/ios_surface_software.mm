@@ -11,13 +11,16 @@
 #include "flutter/fml/logging.h"
 #include "flutter/fml/platform/darwin/cf_utils.h"
 #include "flutter/fml/trace_event.h"
+
+#include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/utils/mac/SkCGUtils.h"
+
+FLUTTER_ASSERT_ARC
 
 namespace flutter {
 
-IOSSurfaceSoftware::IOSSurfaceSoftware(fml::scoped_nsobject<CALayer> layer,
-                                       std::shared_ptr<IOSContext> context)
-    : IOSSurface(std::move(context)), layer_(std::move(layer)) {}
+IOSSurfaceSoftware::IOSSurfaceSoftware(CALayer* layer, std::shared_ptr<IOSContext> context)
+    : IOSSurface(std::move(context)), layer_(layer) {}
 
 IOSSurfaceSoftware::~IOSSurfaceSoftware() = default;
 
@@ -60,7 +63,7 @@ sk_sp<SkSurface> IOSSurfaceSoftware::AcquireBackingStore(const SkISize& size) {
 
   SkImageInfo info = SkImageInfo::MakeN32(size.fWidth, size.fHeight, kPremul_SkAlphaType,
                                           SkColorSpace::MakeSRGB());
-  sk_surface_ = SkSurface::MakeRaster(info, nullptr);
+  sk_surface_ = SkSurfaces::Raster(info, nullptr);
   return sk_surface_;
 }
 
@@ -116,7 +119,7 @@ bool IOSSurfaceSoftware::PresentBackingStore(sk_sp<SkSurface> backing_store) {
     return false;
   }
 
-  layer_.get().contents = reinterpret_cast<id>(static_cast<CGImageRef>(pixmap_image));
+  layer_.contents = (__bridge id) static_cast<CGImageRef>(pixmap_image);
 
   return true;
 }

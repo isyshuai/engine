@@ -5,33 +5,14 @@
 import 'package:ui/ui.dart' as ui;
 
 import 'canvaskit_api.dart';
-import 'skia_object_cache.dart';
 
-/// The CanvasKit implementation of [ui.MaskFilter].
-class CkMaskFilter extends ManagedSkiaObject<SkMaskFilter> {
-  CkMaskFilter.blur(ui.BlurStyle blurStyle, double sigma)
-      : _blurStyle = blurStyle,
-        _sigma = sigma;
-
-  final ui.BlurStyle _blurStyle;
-  final double _sigma;
-
-  @override
-  SkMaskFilter createDefault() => _initSkiaObject();
-
-  @override
-  SkMaskFilter resurrect() => _initSkiaObject();
-
-  SkMaskFilter _initSkiaObject() {
-    return canvasKit.MaskFilter.MakeBlur(
-      toSkBlurStyle(_blurStyle),
-      _sigma,
-      true,
-    )!;
-  }
-
-  @override
-  void delete() {
-    rawSkiaObject?.delete();
-  }
+/// Creates and returns a [SkMaskFilter] that applies a blur effect.
+///
+/// It is the responsibility of the caller to delete the returned Skia object.
+SkMaskFilter createBlurSkMaskFilter(ui.BlurStyle blurStyle, double sigma) {
+  return canvasKit.MaskFilter.MakeBlur(
+    toSkBlurStyle(blurStyle),
+    sigma,
+    true,
+  )!;
 }

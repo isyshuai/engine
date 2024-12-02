@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_FUCHSIA_POINTER_DELEGATE_H_
-#define FLUTTER_SHELL_PLATFORM_FUCHSIA_POINTER_DELEGATE_H_
+#ifndef FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_POINTER_DELEGATE_H_
+#define FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_POINTER_DELEGATE_H_
 
 #include <fuchsia/ui/pointer/cpp/fidl.h>
 
@@ -35,9 +35,7 @@ struct IxnHasher {
 class PointerDelegate {
  public:
   PointerDelegate(fuchsia::ui::pointer::TouchSourceHandle touch_source,
-                  fuchsia::ui::pointer::MouseSourceHandle mouse_source)
-      : touch_source_(touch_source.Bind()),
-        mouse_source_(mouse_source.Bind()) {}
+                  fuchsia::ui::pointer::MouseSourceHandle mouse_source);
 
   // This function collects Fuchsia's TouchPointerSample and MousePointerSample
   // data and transforms them into flutter::PointerData structs. It then calls
@@ -142,4 +140,4 @@ class PointerDelegate {
 };
 
 }  // namespace flutter_runner
-#endif  // FLUTTER_SHELL_PLATFORM_FUCHSIA_POINTER_DELEGATE_H_
+#endif  // FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_POINTER_DELEGATE_H_

@@ -2,23 +2,141 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ui/ui.dart' as ui;
 
+import '../dom.dart';
 import '../engine_canvas.dart';
 import '../frame_reference.dart';
-import '../picture.dart';
 import '../util.dart';
 import '../vector_math.dart';
 import 'bitmap_canvas.dart';
 import 'debug_canvas_reuse_overlay.dart';
 import 'dom_canvas.dart';
+import 'image.dart';
 import 'path/path_metrics.dart';
+import 'recording_canvas.dart';
 import 'surface.dart';
 import 'surface_stats.dart';
+
+class EnginePictureRecorder implements ui.PictureRecorder {
+  EnginePictureRecorder();
+
+  RecordingCanvas? _canvas;
+  late ui.Rect cullRect;
+  bool _isRecording = false;
+
+  RecordingCanvas beginRecording(ui.Rect bounds) {
+    assert(!_isRecording);
+    cullRect = bounds;
+    _isRecording = true;
+    return _canvas = RecordingCanvas(cullRect);
+  }
+
+  @override
+  bool get isRecording => _isRecording;
+
+  @override
+  EnginePicture endRecording() {
+    if (!_isRecording) {
+      // The mobile version returns an empty picture in this case. To match the
+      // behavior we produce a blank picture too.
+      beginRecording(ui.Rect.largest);
+    }
+    _isRecording = false;
+    _canvas!.endRecording();
+    final EnginePicture result = EnginePicture(_canvas, cullRect);
+    // We invoke the handler here, not in the Picture constructor, because we want
+    // [result.approximateBytesUsed] to be available for the handler.
+    ui.Picture.onCreate?.call(result);
+    return result;
+  }
+}
+
+/// An implementation of [ui.Picture] which is backed by a [RecordingCanvas].
+class EnginePicture implements ui.Picture {
+  /// This class is created by the engine, and should not be instantiated
+  /// or extended directly.
+  ///
+  /// To create a [Picture], use a [PictureRecorder].
+  EnginePicture(this.recordingCanvas, this.cullRect);
+
+  @override
+  Future<ui.Image> toImage(int width, int height) async {
+    final ui.Rect imageRect =
+        ui.Rect.fromLTRB(0, 0, width.toDouble(), height.toDouble());
+    final BitmapCanvas canvas = BitmapCanvas.imageData(imageRect);
+    recordingCanvas!.apply(canvas, imageRect);
+    final String imageDataUrl = canvas.toDataUrl();
+    final DomHTMLImageElement imageElement = createDomHTMLImageElement()
+      ..src = imageDataUrl
+      ..width = width.toDouble()
+      ..height = height.toDouble();
+
+    // The image loads asynchronously. We need to wait before returning,
+    // otherwise the returned HtmlImage will be temporarily unusable.
+    final Completer<ui.Image> onImageLoaded = Completer<ui.Image>.sync();
+
+    // Ignoring the returned futures from onError and onLoad because we're
+    // communicating through the `onImageLoaded` completer.
+    late final DomEventListener errorListener;
+    errorListener = createDomEventListener((DomEvent event) {
+      onImageLoaded.completeError(event);
+      imageElement.removeEventListener('error', errorListener);
+    });
+    imageElement.addEventListener('error', errorListener);
+    late final DomEventListener loadListener;
+    loadListener = createDomEventListener((DomEvent event) {
+      onImageLoaded.complete(HtmlImage(
+        imageElement,
+        width,
+        height,
+      ));
+      imageElement.removeEventListener('load', loadListener);
+    });
+    imageElement.addEventListener('load', loadListener);
+    return onImageLoaded.future;
+  }
+
+  @override
+  ui.Image toImageSync(int width, int height) {
+    throw UnsupportedError(
+        'toImageSync is not supported on the HTML backend. Use drawPicture instead, or toImage.');
+  }
+
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    ui.Picture.onDispose?.call(this);
+    _disposed = true;
+  }
+
+  @override
+  bool get debugDisposed {
+    bool? result;
+    assert(() {
+      result = _disposed;
+      return true;
+    }());
+
+    if (result != null) {
+      return result!;
+    }
+
+    throw StateError(
+        'Picture.debugDisposed is only available when asserts are enabled.');
+  }
+
+  @override
+  int get approximateBytesUsed => 0;
+
+  final RecordingCanvas? recordingCanvas;
+  final ui.Rect? cullRect;
+}
 
 // TODO(yjbanov): this is currently very naive. We probably want to cache
 //                fewer large canvases than small canvases. We could also
@@ -54,8 +172,7 @@ class PaintRequest {
   PaintRequest({
     required this.canvasSize,
     required this.paintCallback,
-  })  : assert(canvasSize != null), // ignore: unnecessary_null_comparison
-        assert(paintCallback != null); // ignore: unnecessary_null_comparison
+  });
 
   final ui.Size canvasSize;
   final ui.VoidCallback paintCallback;
@@ -117,12 +234,25 @@ class PersistedPicture extends PersistedLeafSurface {
   bool _requiresRepaint = false;
 
   /// Cache for reusing elements such as images across picture updates.
-  CrossFrameCache<html.HtmlElement>? _elementCache =
-      CrossFrameCache<html.HtmlElement>();
+  CrossFrameCache<DomHTMLElement>? _elementCache =
+      CrossFrameCache<DomHTMLElement>();
 
   @override
-  html.Element createElement() {
-    return defaultCreateElement('flt-picture');
+  DomElement createElement() {
+    final DomElement element = defaultCreateElement('flt-picture');
+
+    // The DOM elements used to render pictures are used purely to put pixels on
+    // the screen. They have no semantic information. If an assistive technology
+    // attempts to scan picture content it will look like garbage and confuse
+    // users. UI semantics are exported as a separate DOM tree rendered parallel
+    // to pictures.
+    //
+    // Why are layer and scene elements not hidden from ARIA? Because those
+    // elements may contain platform views, and platform views must be
+    // accessible.
+    element.setAttribute('aria-hidden', 'true');
+
+    return element;
   }
 
   @override
@@ -193,10 +323,10 @@ class PersistedPicture extends PersistedLeafSurface {
         final ui.Rect? localClipBounds = parentSurface.localClipBounds;
         if (localClipBounds != null) {
           if (bounds == null) {
-            bounds = transformRect(clipTransform, localClipBounds);
+            bounds = clipTransform.transformRect(localClipBounds);
           } else {
             bounds =
-                bounds.intersect(transformRect(clipTransform, localClipBounds));
+                bounds.intersect(clipTransform.transformRect(localClipBounds));
           }
         }
         final Matrix4? localInverse = parentSurface.localTransformInverse;
@@ -216,15 +346,14 @@ class PersistedPicture extends PersistedLeafSurface {
     if (parent!.projectedClip == null) {
       _exactLocalCullRect = localPaintBounds;
     } else {
-      _exactLocalCullRect =
-          localPaintBounds!.intersect(parent!.projectedClip!);
+      _exactLocalCullRect = localPaintBounds!.intersect(parent!.projectedClip!);
     }
     if (_exactLocalCullRect!.width <= 0 || _exactLocalCullRect!.height <= 0) {
       _exactLocalCullRect = ui.Rect.zero;
       _exactGlobalCullRect = ui.Rect.zero;
     } else {
       assert(() {
-        _exactGlobalCullRect = transformRect(transform!, _exactLocalCullRect!);
+        _exactGlobalCullRect = transform!.transformRect(_exactLocalCullRect!);
         return true;
       }());
     }
@@ -631,7 +760,7 @@ class PersistedPicture extends PersistedLeafSurface {
   void debugPrintChildren(StringBuffer buffer, int indent) {
     super.debugPrintChildren(buffer, indent);
     if (rootElement != null && rootElement!.firstChild != null) {
-      final html.Element firstChild = rootElement!.firstChild! as html.Element;
+      final DomElement firstChild = rootElement!.firstChild! as DomElement;
       final String canvasTag = firstChild.tagName.toLowerCase();
       final int canvasHash = firstChild.hashCode;
       buffer.writeln('${'  ' * (indent + 1)}<$canvasTag @$canvasHash />');

@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 import 'dart:isolate';
+import 'dart:ui';
 
-import 'package:litetest/litetest.dart';
+import 'package:test/test.dart';
 
 void main() {
   test('Invalid isolate URI', () async {
@@ -19,5 +20,15 @@ void main() {
       threw = true;
     }
     expect(threw, true);
+  });
+
+  test('UI isolate API throws in a background isolate', () async {
+    void callUiApi(void message) {
+      PlatformDispatcher.instance.onReportTimings = (_) {};
+    }
+    final ReceivePort errorPort = ReceivePort();
+    await Isolate.spawn<void>(callUiApi, null, onError: errorPort.sendPort);
+    final List<dynamic> isolateError = await errorPort.first as List<dynamic>;
+    expect(isolateError[0], 'UI actions are only available on root isolate.');
   });
 }

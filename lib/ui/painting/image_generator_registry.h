@@ -56,7 +56,7 @@ class ImageGeneratorRegistry {
   ///             `std::shared_ptr<ImageGenerator>(nullptr)` is returned.
   /// @see        `ImageGenerator`
   std::shared_ptr<ImageGenerator> CreateCompatibleGenerator(
-      sk_sp<SkData> buffer);
+      const sk_sp<SkData>& buffer);
 
   fml::WeakPtr<ImageGeneratorRegistry> GetWeakPtr() const;
 
@@ -90,4 +90,4 @@ class ImageGeneratorRegistry {
 
 }  // namespace flutter
 
-#endif  // FLUTTER_LIB_UI_PAINTING_IMAGE_DECODER_H_
+#endif  // FLUTTER_LIB_UI_PAINTING_IMAGE_GENERATOR_REGISTRY_H_

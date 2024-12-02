@@ -41,7 +41,7 @@ fuchsia::ui::composition::FlatlandHandle FakeFlatland::ConnectFlatland(
 }
 
 void FakeFlatland::Disconnect(fuchsia::ui::composition::FlatlandError error) {
-  flatland_binding_.events().OnError(std::move(error));
+  flatland_binding_.events().OnError(error);
   flatland_binding_.Unbind();
   allocator_binding_
       .Unbind();  // TODO(fxb/85619): Does the real Scenic unbind this when
@@ -211,6 +211,39 @@ void FakeFlatland::SetTranslation(
   transform->translation = translation;
 }
 
+void FakeFlatland::SetScale(fuchsia::ui::composition::TransformId transform_id,
+                            fuchsia::math::VecF scale) {
+  if (transform_id.value == 0) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetScale: TransformId 0 is invalid.";
+    return;
+  }
+
+  auto found_transform = pending_graph_.transform_map.find(transform_id.value);
+  if (found_transform == pending_graph_.transform_map.end()) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetScale: TransformId "
+                     << transform_id.value << " does not exist.";
+    return;
+  }
+
+  if (scale.x == 0.f || scale.y == 0.f) {
+    FML_CHECK(false) << "SetScale failed, zero values not allowed (" << scale.x
+                     << ", " << scale.y << " ).";
+    return;
+  }
+
+  if (isinf(scale.x) || isinf(scale.y) || isnan(scale.x) || isnan(scale.y)) {
+    FML_CHECK(false) << "SetScale failed, invalid scale values (" << scale.x
+                     << ", " << scale.y << " ).";
+    return;
+  }
+
+  auto& transform = found_transform->second;
+  FML_CHECK(transform);
+  transform->scale = scale;
+}
+
 void FakeFlatland::SetOrientation(
     fuchsia::ui::composition::TransformId transform_id,
     fuchsia::ui::composition::Orientation orientation) {
@@ -234,27 +267,58 @@ void FakeFlatland::SetOrientation(
   transform->orientation = orientation;
 }
 
-void FakeFlatland::SetClipBounds(
+void FakeFlatland::SetOpacity(
     fuchsia::ui::composition::TransformId transform_id,
-    fuchsia::math::Rect clip_bounds) {
+    float value) {
   if (transform_id.value == 0) {
     // TODO(fxb/85619): Raise a FlatlandError here
-    FML_CHECK(false)
-        << "FakeFlatland::SetClipBounds: TransformId 0 is invalid.";
+    FML_CHECK(false) << "FakeFlatland::SetOpacity: TransformId 0 is invalid.";
     return;
   }
 
   auto found_transform = pending_graph_.transform_map.find(transform_id.value);
   if (found_transform == pending_graph_.transform_map.end()) {
     // TODO(fxb/85619): Raise a FlatlandError here
-    FML_CHECK(false) << "FakeFlatland::SetClipBounds: TransformId "
+    FML_CHECK(false) << "FakeFlatland::SetOpacity: TransformId "
+                     << transform_id.value << " does not exist.";
+    return;
+  }
+
+  if (value < 0.f || value > 1.f) {
+    FML_CHECK(false) << "FakeFlatland::SetOpacity: Invalid opacity value.";
+  }
+
+  auto& transform = found_transform->second;
+  FML_CHECK(transform);
+  transform->opacity = value;
+}
+
+void FakeFlatland::SetClipBoundary(
+    fuchsia::ui::composition::TransformId transform_id,
+    std::unique_ptr<fuchsia::math::Rect> bounds) {
+  if (transform_id.value == 0) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false)
+        << "FakeFlatland::SetClipBoundary: TransformId 0 is invalid.";
+    return;
+  }
+
+  auto found_transform = pending_graph_.transform_map.find(transform_id.value);
+  if (found_transform == pending_graph_.transform_map.end()) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetClipBoundary: TransformId "
                      << transform_id.value << " does not exist.";
     return;
   }
 
   auto& transform = found_transform->second;
   FML_CHECK(transform);
-  transform->clip_bounds = clip_bounds;
+  if (bounds == nullptr) {
+    transform->clip_bounds = std::nullopt;
+    return;
+  }
+
+  transform->clip_bounds = *bounds.get();
 }
 
 // TODO(fxbug.dev/89111): Re-enable once SDK rolls.
@@ -621,6 +685,37 @@ void FakeFlatland::SetImageDestinationSize(
   image->destination_size = size;
 }
 
+void FakeFlatland::SetImageBlendingFunction(
+    fuchsia::ui::composition::ContentId image_id,
+    fuchsia::ui::composition::BlendMode blend_mode) {
+  if (image_id.value == 0) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false)
+        << "FakeFlatland::SetImageDestinationSize: ContentId 0 is invalid.";
+    return;
+  }
+
+  auto found_content = pending_graph_.content_map.find(image_id.value);
+  if (found_content == pending_graph_.content_map.end()) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetImageDestinationSize: ContentId "
+                     << image_id.value << " does not exist.";
+    return;
+  }
+
+  auto& content = found_content->second;
+  FML_CHECK(content);
+  FakeImage* image = std::get_if<FakeImage>(content.get());
+  if (image == nullptr) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetImageDestinationSize: ContentId "
+                     << image_id.value << " is not an Image.";
+    return;
+  }
+
+  image->blend_mode = blend_mode;
+}
+
 void FakeFlatland::SetViewportProperties(
     fuchsia::ui::composition::ContentId viewport_id,
     fuchsia::ui::composition::ViewportProperties properties) {
@@ -733,6 +828,52 @@ void FakeFlatland::ReleaseImage(fuchsia::ui::composition::ContentId image_id) {
   }
 
   pending_graph_.content_map.erase(found_content);
+}
+
+void FakeFlatland::SetHitRegions(
+    fuchsia::ui::composition::TransformId transform_id,
+    std::vector<fuchsia::ui::composition::HitRegion> regions) {
+  if (transform_id.value == 0) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false)
+        << "FakeFlatland::SetTranslation: TransformId 0 is invalid.";
+    return;
+  }
+
+  auto found_transform = pending_graph_.transform_map.find(transform_id.value);
+  if (found_transform == pending_graph_.transform_map.end()) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetTranslation: TransformId "
+                     << transform_id.value << " does not exist.";
+    return;
+  }
+
+  auto& transform = found_transform->second;
+  FML_CHECK(transform);
+  transform->hit_regions = std::move(regions);
+}
+
+void FakeFlatland::SetInfiniteHitRegion(
+    fuchsia::ui::composition::TransformId transform_id,
+    fuchsia::ui::composition::HitTestInteraction hit_test) {
+  if (transform_id.value == 0) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false)
+        << "FakeFlatland::SetTranslation: TransformId 0 is invalid.";
+    return;
+  }
+
+  auto found_transform = pending_graph_.transform_map.find(transform_id.value);
+  if (found_transform == pending_graph_.transform_map.end()) {
+    // TODO(fxb/85619): Raise a FlatlandError here
+    FML_CHECK(false) << "FakeFlatland::SetTranslation: TransformId "
+                     << transform_id.value << " does not exist.";
+    return;
+  }
+
+  auto& transform = found_transform->second;
+  ZX_ASSERT(transform);
+  transform->hit_regions = {kInfiniteHitRegion};
 }
 
 void FakeFlatland::Clear() {

@@ -4,13 +4,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
-# This script is expected to run from $ENGINE_PATH/src/out/host_release/
-# it is currently used only by automation to collect and upload metrics.
+# This script expects ${ENGINE_PATH} to be set. It is currently used only
+# by automation to collect and upload metrics.
 
 set -ex
 
-./txt_benchmarks --benchmark_format=json > txt_benchmarks.json
-./fml_benchmarks --benchmark_format=json > fml_benchmarks.json
-./shell_benchmarks --benchmark_format=json > shell_benchmarks.json
-./ui_benchmarks --benchmark_format=json > ui_benchmarks.json
+VARIANT=$1
 
+${ENGINE_PATH}/src/out/${VARIANT}/txt_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/txt_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/fml_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/fml_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/shell_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/shell_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/ui_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/ui_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/display_list_builder_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/display_list_builder_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/display_list_region_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/display_list_region_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/display_list_transform_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/display_list_transform_benchmarks.json
+${ENGINE_PATH}/src/out/${VARIANT}/geometry_benchmarks --benchmark_format=json > ${ENGINE_PATH}/src/out/${VARIANT}/geometry_benchmarks.json

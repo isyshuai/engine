@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEY_CODE_MAP_INTERNAL_H_
-#define FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEY_CODE_MAP_INTERNAL_H_
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_
 
 #import <UIKit/UIKit.h>
 #include <map>
@@ -15,6 +15,7 @@
  * MacOS doesn't provide a scan code, but a virtual keycode to represent a
  * physical key.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<uint32_t, uint64_t> keyCodeToPhysicalKey;
 
 /**
@@ -23,9 +24,22 @@ extern const std::map<uint32_t, uint64_t> keyCodeToPhysicalKey;
  * This is used to derive logical keys that can't or shouldn't be derived from
  * |charactersIgnoringModifiers|.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<uint32_t, uint64_t> keyCodeToLogicalKey;
 
-// Several mask constants. See KeyCodeMap.mm for their descriptions.
+/**
+ * Maps iOS specific string values of nonvisible keys to logical keys.
+ *
+ * TODO(dkwingsmt): Change this getter function to a global variable. I tried to
+ * do this but the unit test on CI threw errors saying "message sent to
+ * deallocated instance" on the NSDictionary.
+ *
+ * See:
+ * https://developer.apple.com/documentation/uikit/uikeycommand/input_strings_for_special_keys?language=objc
+ */
+extern NSDictionary<NSString*, NSNumber*>* specialKeyMapping;
+
+// Several mask constants. See KeyCodeMap.g.mm for their descriptions.
 
 extern const uint64_t kValueMask;
 extern const uint64_t kUnicodePlane;
@@ -70,44 +84,48 @@ typedef enum {
  * not whether it is the left or right modifier.
  */
 constexpr uint32_t kModifierFlagAnyMask =
-    kModifierFlagShiftAny | kModifierFlagControlAny | kModifierFlagAltAny |
-    kModifierFlagMetaAny;
+    kModifierFlagShiftAny | kModifierFlagControlAny | kModifierFlagAltAny | kModifierFlagMetaAny;
 
 /**
  * A mask of the modifier flags that represent only left or right modifier
  * keys, and not the generic "Any" mask.
  */
-constexpr uint32_t kModifierFlagSidedMask =
-    kModifierFlagControlLeft | kModifierFlagShiftLeft |
-    kModifierFlagShiftRight | kModifierFlagMetaLeft | kModifierFlagMetaRight |
-    kModifierFlagAltLeft | kModifierFlagAltRight | kModifierFlagControlRight;
+constexpr uint32_t kModifierFlagSidedMask = kModifierFlagControlLeft | kModifierFlagShiftLeft |
+                                            kModifierFlagShiftRight | kModifierFlagMetaLeft |
+                                            kModifierFlagMetaRight | kModifierFlagAltLeft |
+                                            kModifierFlagAltRight | kModifierFlagControlRight;
 
 /**
  * Map |UIKey.keyCode| to the matching sided modifier in UIEventModifierFlags.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<uint32_t, ModifierFlag> keyCodeToModifierFlag;
 
 /**
  * Map a bit of bitmask of sided modifiers in UIEventModifierFlags to their
  * corresponding |UIKey.keyCode|.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<ModifierFlag, uint32_t> modifierFlagToKeyCode;
 
 /**
  * Maps a sided modifier key to the corresponding flag matching either side of
  * that type of modifier.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<ModifierFlag, ModifierFlag> sidedModifierToAny;
 
 /**
  * Maps a non-sided modifier key to the corresponding flag matching the left key
  * of that type of modifier.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::map<ModifierFlag, ModifierFlag> anyModifierToLeft;
 
 /**
  * A set of keycodes corresponding to function keys.
  */
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern const std::set<uint32_t> functionKeyCodes;
 
-#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEY_CODE_MAP_INTERNAL_H_
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_IOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_

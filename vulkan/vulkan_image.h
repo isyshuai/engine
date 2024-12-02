@@ -5,9 +5,8 @@
 #ifndef FLUTTER_VULKAN_VULKAN_IMAGE_H_
 #define FLUTTER_VULKAN_VULKAN_IMAGE_H_
 
-#include "flutter/fml/compiler_specific.h"
 #include "flutter/fml/macros.h"
-#include "vulkan_handle.h"
+#include "flutter/vulkan/procs/vulkan_handle.h"
 
 namespace vulkan {
 

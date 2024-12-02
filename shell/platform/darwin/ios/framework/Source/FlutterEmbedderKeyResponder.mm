@@ -11,6 +11,9 @@
 
 #import "KeyCodeMap_Internal.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterCodecs.h"
+#import "flutter/shell/platform/darwin/common/framework/Headers/FlutterMacros.h"
+
+FLUTTER_ASSERT_ARC
 
 namespace {
 
@@ -146,10 +149,17 @@ static const char* getEventCharacters(NSString* characters, UIKeyboardHIDUsage k
 /**
  * Returns the logical key of a KeyUp or KeyDown event.
  *
+ * The `maybeSpecialKey` is a nullable integer, and if not nil, indicates
+ * that the event key is a special key as defined by `specialKeyMapping`,
+ * and is the corresponding logical key.
+ *
  * For modifier keys, use GetLogicalKeyForModifier.
  */
-static uint64_t GetLogicalKeyForEvent(FlutterUIPressProxy* press, uint64_t physicalKey)
+static uint64_t GetLogicalKeyForEvent(FlutterUIPressProxy* press, NSNumber* maybeSpecialKey)
     API_AVAILABLE(ios(13.4)) {
+  if (maybeSpecialKey != nil) {
+    return [maybeSpecialKey unsignedLongLongValue];
+  }
   // Look to see if the keyCode can be mapped from keycode.
   auto fromKeyCode = keyCodeToLogicalKey.find(press.key.keyCode);
   if (fromKeyCode != keyCodeToLogicalKey.end()) {
@@ -158,7 +168,7 @@ static uint64_t GetLogicalKeyForEvent(FlutterUIPressProxy* press, uint64_t physi
   const char* characters =
       getEventCharacters(press.key.charactersIgnoringModifiers, press.key.keyCode);
   NSString* keyLabel =
-      characters == nullptr ? nil : [[[NSString alloc] initWithUTF8String:characters] autorelease];
+      characters == nullptr ? nil : [[NSString alloc] initWithUTF8String:characters];
   NSUInteger keyLabelLength = [keyLabel length];
   // If this key is printable, generate the logical key from its Unicode
   // value. Control keys such as ESC, CTRL, and SHIFT are not printable. HOME,
@@ -245,7 +255,7 @@ void HandleResponse(bool handled, void* user_data);
  */
 @interface FlutterKeyPendingResponse : NSObject
 
-@property(readonly) FlutterEmbedderKeyResponder* responder;
+@property(readonly, weak) FlutterEmbedderKeyResponder* responder;
 
 @property(nonatomic) uint64_t responseId;
 
@@ -295,7 +305,7 @@ void HandleResponse(bool handled, void* user_data);
  * Only set in debug mode. Nil in release mode, or if the callback has not been
  * handled.
  */
-@property(readonly) NSString* debugHandleSource;
+@property(readonly, copy) NSString* debugHandleSource;
 @end
 
 @implementation FlutterKeyCallbackGuard {
@@ -310,11 +320,6 @@ void HandleResponse(bool handled, void* user_data);
     _handled = FALSE;
   }
   return self;
-}
-
-- (void)dealloc {
-  [_callback release];
-  [super dealloc];
 }
 
 - (void)pendTo:(nonnull NSMutableDictionary<NSNumber*, FlutterAsyncKeyCallback>*)pendingResponses
@@ -357,7 +362,7 @@ void HandleResponse(bool handled, void* user_data);
  * The keys of the dictionary are physical keys, while the values are the logical keys
  * of the key down event.
  */
-@property(nonatomic, retain, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* pressingRecords;
+@property(nonatomic, copy, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* pressingRecords;
 
 /**
  * A constant mask for NSEvent.modifierFlags that Flutter synchronizes with.
@@ -396,7 +401,7 @@ void HandleResponse(bool handled, void* user_data);
  * Its values are |responseId|s, and keys are the callback that was received
  * along with the event.
  */
-@property(nonatomic, retain, readonly)
+@property(nonatomic, copy, readonly)
     NSMutableDictionary<NSNumber*, FlutterAsyncKeyCallback>* pendingResponses;
 
 /**
@@ -495,13 +500,6 @@ void HandleResponse(bool handled, void* user_data);
   return self;
 }
 
-- (void)dealloc {
-  [_sendEvent release];
-  [_pressingRecords release];
-  [_pendingResponses release];
-  [super dealloc];
-}
-
 - (void)handlePress:(nonnull FlutterUIPressProxy*)press
            callback:(FlutterAsyncKeyCallback)callback API_AVAILABLE(ios(13.4)) {
   if (@available(iOS 13.4, *)) {
@@ -515,11 +513,11 @@ void HandleResponse(bool handled, void* user_data);
   FlutterKeyCallbackGuard* guardedCallback = nil;
   switch (press.phase) {
     case UIPressPhaseBegan:
-      guardedCallback = [[[FlutterKeyCallbackGuard alloc] initWithCallback:callback] autorelease];
+      guardedCallback = [[FlutterKeyCallbackGuard alloc] initWithCallback:callback];
       [self handlePressBegin:press callback:guardedCallback];
       break;
     case UIPressPhaseEnded:
-      guardedCallback = [[[FlutterKeyCallbackGuard alloc] initWithCallback:callback] autorelease];
+      guardedCallback = [[FlutterKeyCallbackGuard alloc] initWithCallback:callback];
       [self handlePressEnd:press callback:guardedCallback];
       break;
     case UIPressPhaseChanged:
@@ -604,6 +602,7 @@ void HandleResponse(bool handled, void* user_data);
       .logical = kCapsLockLogicalKey,
       .character = nil,
       .synthesized = true,
+      .device_type = kFlutterKeyEventDeviceTypeKeyboard,
   };
   _sendEvent(flutterEvent, nullptr, nullptr);
 
@@ -624,9 +623,9 @@ void HandleResponse(bool handled, void* user_data);
   _responseId += 1;
   uint64_t responseId = _responseId;
   FlutterKeyPendingResponse* pending =
-      [[[FlutterKeyPendingResponse alloc] initWithHandler:self responseId:responseId] autorelease];
+      [[FlutterKeyPendingResponse alloc] initWithHandler:self responseId:responseId];
   [callback pendTo:_pendingResponses withId:responseId];
-  _sendEvent(event, HandleResponse, pending);
+  _sendEvent(event, HandleResponse, (__bridge_retained void* _Nullable)pending);
 }
 
 - (void)sendEmptyEvent {
@@ -638,6 +637,7 @@ void HandleResponse(bool handled, void* user_data);
       .logical = 0,
       .character = nil,
       .synthesized = false,
+      .device_type = kFlutterKeyEventDeviceTypeKeyboard,
   };
   _sendEvent(event, nil, nil);
 }
@@ -658,6 +658,7 @@ void HandleResponse(bool handled, void* user_data);
       .logical = logicalKey,
       .character = nil,
       .synthesized = true,
+      .device_type = kFlutterKeyEventDeviceTypeKeyboard,
   };
   [self updateKey:physicalKey asPressed:isDownEvent ? logicalKey : 0];
   _sendEvent(flutterEvent, nullptr, nullptr);
@@ -670,7 +671,11 @@ void HandleResponse(bool handled, void* user_data);
     return;
   }
   uint64_t physicalKey = GetPhysicalKeyForKeyCode(press.key.keyCode);
-  uint64_t logicalKey = GetLogicalKeyForEvent(press, physicalKey);
+  // Some unprintable keys on iOS have literal names on their key label, such as
+  // @"UIKeyInputEscape". They are called the "special keys" and have predefined
+  // logical keys and empty characters.
+  NSNumber* specialKey = [specialKeyMapping objectForKey:press.key.charactersIgnoringModifiers];
+  uint64_t logicalKey = GetLogicalKeyForEvent(press, specialKey);
   [self synchronizeModifiers:press];
 
   NSNumber* pressedLogicalKey = nil;
@@ -697,8 +702,10 @@ void HandleResponse(bool handled, void* user_data);
       .type = kFlutterKeyEventTypeDown,
       .physical = physicalKey,
       .logical = pressedLogicalKey == nil ? logicalKey : [pressedLogicalKey unsignedLongLongValue],
-      .character = getEventCharacters(press.key.characters, press.key.keyCode),
+      .character =
+          specialKey != nil ? nil : getEventCharacters(press.key.characters, press.key.keyCode),
       .synthesized = false,
+      .device_type = kFlutterKeyEventDeviceTypeKeyboard,
   };
   [self sendPrimaryFlutterEvent:flutterEvent callback:callback];
 }
@@ -732,6 +739,7 @@ void HandleResponse(bool handled, void* user_data);
       .logical = [pressedLogicalKey unsignedLongLongValue],
       .character = nil,
       .synthesized = false,
+      .device_type = kFlutterKeyEventDeviceTypeKeyboard,
   };
   [self sendPrimaryFlutterEvent:flutterEvent callback:callback];
 }
@@ -851,7 +859,7 @@ void HandleResponse(bool handled, void* user_data);
     // The caps lock modifier needs to be unset only if it was already on
     // and this is a key up. This is because it indicates the lock state, and
     // not the key press state. The caps lock state should be on between the
-    // first down, and the second up (i.e. while the lock in in effect), and
+    // first down, and the second up (i.e. while the lock in effect), and
     // this code turns it off at the second up event. The OS leaves it on still
     // because of iOS's weird late processing of modifier states. Synthesis of
     // the appropriate synthesized key events happens in synchronizeModifiers.
@@ -866,7 +874,7 @@ void HandleResponse(bool handled, void* user_data);
 
 namespace {
 void HandleResponse(bool handled, void* user_data) {
-  FlutterKeyPendingResponse* pending = reinterpret_cast<FlutterKeyPendingResponse*>(user_data);
+  FlutterKeyPendingResponse* pending = (__bridge_transfer FlutterKeyPendingResponse*)user_data;
   [pending.responder handleResponse:handled forId:pending.responseId];
 }
 }  // namespace

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.AssetManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import io.flutter.FlutterInjector;
 import io.flutter.Log;
 import io.flutter.embedding.engine.dart.DartExecutor;
@@ -24,19 +25,24 @@ import io.flutter.embedding.engine.plugins.util.GeneratedPluginRegister;
 import io.flutter.embedding.engine.renderer.FlutterRenderer;
 import io.flutter.embedding.engine.renderer.RenderSurface;
 import io.flutter.embedding.engine.systemchannels.AccessibilityChannel;
+import io.flutter.embedding.engine.systemchannels.BackGestureChannel;
 import io.flutter.embedding.engine.systemchannels.DeferredComponentChannel;
-import io.flutter.embedding.engine.systemchannels.KeyEventChannel;
 import io.flutter.embedding.engine.systemchannels.LifecycleChannel;
 import io.flutter.embedding.engine.systemchannels.LocalizationChannel;
 import io.flutter.embedding.engine.systemchannels.MouseCursorChannel;
 import io.flutter.embedding.engine.systemchannels.NavigationChannel;
 import io.flutter.embedding.engine.systemchannels.PlatformChannel;
+import io.flutter.embedding.engine.systemchannels.ProcessTextChannel;
 import io.flutter.embedding.engine.systemchannels.RestorationChannel;
+import io.flutter.embedding.engine.systemchannels.ScribeChannel;
 import io.flutter.embedding.engine.systemchannels.SettingsChannel;
+import io.flutter.embedding.engine.systemchannels.SpellCheckChannel;
 import io.flutter.embedding.engine.systemchannels.SystemChannel;
 import io.flutter.embedding.engine.systemchannels.TextInputChannel;
 import io.flutter.plugin.localization.LocalizationPlugin;
 import io.flutter.plugin.platform.PlatformViewsController;
+import io.flutter.plugin.text.ProcessTextPlugin;
+import io.flutter.util.ViewUtils;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -75,7 +81,7 @@ import java.util.Set;
  * {@link DartExecutor} is run. Each Isolate is a self-contained Dart environment and cannot
  * communicate with each other except via Isolate ports.
  */
-public class FlutterEngine {
+public class FlutterEngine implements ViewUtils.DisplayUpdater {
   private static final String TAG = "FlutterEngine";
 
   @NonNull private final FlutterJNI flutterJNI;
@@ -87,14 +93,17 @@ public class FlutterEngine {
   // System channels.
   @NonNull private final AccessibilityChannel accessibilityChannel;
   @NonNull private final DeferredComponentChannel deferredComponentChannel;
-  @NonNull private final KeyEventChannel keyEventChannel;
   @NonNull private final LifecycleChannel lifecycleChannel;
   @NonNull private final LocalizationChannel localizationChannel;
   @NonNull private final MouseCursorChannel mouseCursorChannel;
   @NonNull private final NavigationChannel navigationChannel;
+  @NonNull private final BackGestureChannel backGestureChannel;
   @NonNull private final RestorationChannel restorationChannel;
   @NonNull private final PlatformChannel platformChannel;
+  @NonNull private final ProcessTextChannel processTextChannel;
+  @NonNull private final ScribeChannel scribeChannel;
   @NonNull private final SettingsChannel settingsChannel;
+  @NonNull private final SpellCheckChannel spellCheckChannel;
   @NonNull private final SystemChannel systemChannel;
   @NonNull private final TextInputChannel textInputChannel;
 
@@ -279,6 +288,27 @@ public class FlutterEngine {
       @Nullable String[] dartVmArgs,
       boolean automaticallyRegisterPlugins,
       boolean waitForRestorationData) {
+    this(
+        context,
+        flutterLoader,
+        flutterJNI,
+        platformViewsController,
+        dartVmArgs,
+        automaticallyRegisterPlugins,
+        waitForRestorationData,
+        null);
+  }
+
+  @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
+  public FlutterEngine(
+      @NonNull Context context,
+      @Nullable FlutterLoader flutterLoader,
+      @NonNull FlutterJNI flutterJNI,
+      @NonNull PlatformViewsController platformViewsController,
+      @Nullable String[] dartVmArgs,
+      boolean automaticallyRegisterPlugins,
+      boolean waitForRestorationData,
+      @Nullable FlutterEngineGroup group) {
     AssetManager assetManager;
     try {
       assetManager = context.createPackageContext(context.getPackageName(), 0).getAssets();
@@ -301,14 +331,17 @@ public class FlutterEngine {
 
     accessibilityChannel = new AccessibilityChannel(dartExecutor, flutterJNI);
     deferredComponentChannel = new DeferredComponentChannel(dartExecutor);
-    keyEventChannel = new KeyEventChannel(dartExecutor);
     lifecycleChannel = new LifecycleChannel(dartExecutor);
     localizationChannel = new LocalizationChannel(dartExecutor);
     mouseCursorChannel = new MouseCursorChannel(dartExecutor);
     navigationChannel = new NavigationChannel(dartExecutor);
+    backGestureChannel = new BackGestureChannel(dartExecutor);
     platformChannel = new PlatformChannel(dartExecutor);
+    processTextChannel = new ProcessTextChannel(dartExecutor, context.getPackageManager());
     restorationChannel = new RestorationChannel(dartExecutor, waitForRestorationData);
+    scribeChannel = new ScribeChannel(dartExecutor);
     settingsChannel = new SettingsChannel(dartExecutor);
+    spellCheckChannel = new SpellCheckChannel(dartExecutor);
     systemChannel = new SystemChannel(dartExecutor);
     textInputChannel = new TextInputChannel(dartExecutor);
 
@@ -347,13 +380,21 @@ public class FlutterEngine {
     this.platformViewsController.onAttachedToJNI();
 
     this.pluginRegistry =
-        new FlutterEngineConnectionRegistry(context.getApplicationContext(), this, flutterLoader);
+        new FlutterEngineConnectionRegistry(
+            context.getApplicationContext(), this, flutterLoader, group);
+
+    localizationPlugin.sendLocalesToFlutter(context.getResources().getConfiguration());
 
     // Only automatically register plugins if both constructor parameter and
     // loaded AndroidManifest config turn this feature on.
     if (automaticallyRegisterPlugins && flutterLoader.automaticallyRegisterPlugins()) {
       GeneratedPluginRegister.registerGeneratedPlugins(this);
     }
+
+    ViewUtils.calculateMaximumDisplayMetrics(context, this);
+
+    ProcessTextPlugin processTextPlugin = new ProcessTextPlugin(this.getProcessTextChannel());
+    this.pluginRegistry.add(processTextPlugin);
   }
 
   private void attachToJni() {
@@ -391,7 +432,10 @@ public class FlutterEngine {
       @NonNull Context context,
       @NonNull DartEntrypoint dartEntrypoint,
       @Nullable String initialRoute,
-      @Nullable List<String> dartEntrypointArgs) {
+      @Nullable List<String> dartEntrypointArgs,
+      @Nullable PlatformViewsController platformViewsController,
+      boolean automaticallyRegisterPlugins,
+      boolean waitForRestorationData) {
     if (!isAttachedToJni()) {
       throw new IllegalStateException(
           "Spawn can only be called on a fully constructed FlutterEngine");
@@ -407,7 +451,11 @@ public class FlutterEngine {
         context, // Context.
         null, // FlutterLoader. A null value passed here causes the constructor to get it from the
         // FlutterInjector.
-        newFlutterJNI); // FlutterJNI.
+        newFlutterJNI, // FlutterJNI.
+        platformViewsController, // PlatformViewsController.
+        null, // String[]. The Dart VM has already started, this arguments will have no effect.
+        automaticallyRegisterPlugins, // boolean.
+        waitForRestorationData); // boolean
   }
 
   /**
@@ -481,12 +529,6 @@ public class FlutterEngine {
     return accessibilityChannel;
   }
 
-  /** System channel that sends key events from Android to Flutter. */
-  @NonNull
-  public KeyEventChannel getKeyEventChannel() {
-    return keyEventChannel;
-  }
-
   /** System channel that sends Android lifecycle events to Flutter. */
   @NonNull
   public LifecycleChannel getLifecycleChannel() {
@@ -505,6 +547,12 @@ public class FlutterEngine {
     return navigationChannel;
   }
 
+  /** System channel that sends back gesture commands from Android to Flutter. */
+  @NonNull
+  public BackGestureChannel getBackGestureChannel() {
+    return backGestureChannel;
+  }
+
   /**
    * System channel that sends platform-oriented requests and information to Flutter, e.g., requests
    * to play sounds, requests for haptics, system chrome settings, etc.
@@ -512,6 +560,12 @@ public class FlutterEngine {
   @NonNull
   public PlatformChannel getPlatformChannel() {
     return platformChannel;
+  }
+
+  /** System channel that sends text processing requests from Flutter to Android. */
+  @NonNull
+  public ProcessTextChannel getProcessTextChannel() {
+    return processTextChannel;
   }
 
   /**
@@ -557,6 +611,18 @@ public class FlutterEngine {
   @NonNull
   public TextInputChannel getTextInputChannel() {
     return textInputChannel;
+  }
+
+  /** System channel that sends and receives Scribe requests and results. */
+  @NonNull
+  public ScribeChannel getScribeChannel() {
+    return scribeChannel;
+  }
+
+  /** System channel that sends and receives spell check requests and results. */
+  @NonNull
+  public SpellCheckChannel getSpellCheckChannel() {
+    return spellCheckChannel;
   }
 
   /**
@@ -612,5 +678,10 @@ public class FlutterEngine {
      * <p>For the duration of the call, the Flutter engine is still valid.
      */
     void onEngineWillDestroy();
+  }
+
+  @Override
+  public void updateDisplayMetrics(float width, float height, float density) {
+    flutterJNI.updateDisplayMetrics(0 /* display ID */, width, height, density);
   }
 }

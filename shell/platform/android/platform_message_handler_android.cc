@@ -1,3 +1,6 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "flutter/shell/platform/android/platform_message_handler_android.h"
 
@@ -20,8 +23,9 @@ void PlatformMessageHandlerAndroid::InvokePlatformMessageResponseCallback(
   {
     std::lock_guard lock(pending_responses_mutex_);
     auto it = pending_responses_.find(response_id);
-    if (it == pending_responses_.end())
+    if (it == pending_responses_.end()) {
       return;
+    }
     message_response = std::move(it->second);
     pending_responses_.erase(it);
   }
@@ -39,8 +43,9 @@ void PlatformMessageHandlerAndroid::InvokePlatformMessageEmptyResponseCallback(
   {
     std::lock_guard lock(pending_responses_mutex_);
     auto it = pending_responses_.find(response_id);
-    if (it == pending_responses_.end())
+    if (it == pending_responses_.end()) {
       return;
+    }
     message_response = std::move(it->second);
     pending_responses_.erase(it);
   }
@@ -50,8 +55,8 @@ void PlatformMessageHandlerAndroid::InvokePlatformMessageEmptyResponseCallback(
 // |PlatformView|
 void PlatformMessageHandlerAndroid::HandlePlatformMessage(
     std::unique_ptr<flutter::PlatformMessage> message) {
-  // Called from the ui thread.
-  int response_id = next_response_id_++;
+  // Called from any thread.
+  int response_id = next_response_id_.fetch_add(1);
   if (auto response = message->response()) {
     std::lock_guard lock(pending_responses_mutex_);
     pending_responses_[response_id] = response;

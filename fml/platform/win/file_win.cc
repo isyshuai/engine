@@ -25,49 +25,38 @@
 namespace fml {
 
 static std::string GetFullHandlePath(const fml::UniqueFD& handle) {
-  // Although the documentation claims that GetFinalPathNameByHandle is
-  // supported for UWP apps, turns out it returns ACCESS_DENIED in this case
-  // hence the need to workaround it by maintaining a map of file handles to
-  // absolute paths populated by fml::OpenDirectory.
-#ifdef WINUWP
-  std::optional<fml::internal::os_win::DirCacheEntry> found =
-      fml::internal::os_win::UniqueFDTraits::GetCacheEntry(handle.get());
-
-  if (found) {
-    FILE_ID_INFO info;
-
-    BOOL result = GetFileInformationByHandleEx(
-        handle.get(), FILE_INFO_BY_HANDLE_CLASS::FileIdInfo, &info,
-        sizeof(FILE_ID_INFO));
-
-    // Assuming it was possible to retrieve fileinfo, compare the id field.  The
-    // handle hasn't been reused if the file identifier is the same as when it
-    // was cached
-    if (result && memcmp(found.value().id.Identifier, info.FileId.Identifier,
-                         sizeof(FILE_ID_INFO))) {
-      return WideStringToString(found.value().filename);
-    } else {
-      fml::internal::os_win::UniqueFDTraits::RemoveCacheEntry(handle.get());
-    }
-  }
-
-  return std::string();
-#else
   wchar_t buffer[MAX_PATH] = {0};
   const DWORD buffer_size = ::GetFinalPathNameByHandle(
       handle.get(), buffer, MAX_PATH, FILE_NAME_NORMALIZED);
   if (buffer_size == 0) {
     return {};
   }
-  return WideStringToString({buffer, buffer_size});
-#endif
+  return WideStringToUtf8({buffer, buffer_size});
+}
+
+static bool IsAbsolutePath(const char* path) {
+  if (path == nullptr || strlen(path) == 0) {
+    return false;
+  }
+
+  auto wpath = Utf8ToWideString({path});
+  if (wpath.empty()) {
+    return false;
+  }
+
+  return ::PathIsRelative(wpath.c_str()) == FALSE;
 }
 
 static std::string GetAbsolutePath(const fml::UniqueFD& base_directory,
                                    const char* subpath) {
-  std::stringstream stream;
-  stream << GetFullHandlePath(base_directory) << "\\" << subpath;
-  auto path = stream.str();
+  std::string path;
+  if (IsAbsolutePath(subpath)) {
+    path = subpath;
+  } else {
+    std::stringstream stream;
+    stream << GetFullHandlePath(base_directory) << "\\" << subpath;
+    path = stream.str();
+  }
   std::replace(path.begin(), path.end(), '/', '\\');
   return path;
 }
@@ -96,29 +85,29 @@ static DWORD GetDesiredAccessFlags(FilePermission permission) {
 static DWORD GetShareFlags(FilePermission permission) {
   switch (permission) {
     case FilePermission::kRead:
-      return FILE_SHARE_READ;
+      return FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
     case FilePermission::kWrite:
-      return FILE_SHARE_WRITE;
+      return 0;
     case FilePermission::kReadWrite:
-      return FILE_SHARE_READ | FILE_SHARE_WRITE;
+      return 0;
   }
   return FILE_SHARE_READ;
 }
 
 static DWORD GetFileAttributesForUtf8Path(const char* absolute_path) {
-  return ::GetFileAttributes(StringToWideString(absolute_path).c_str());
+  return ::GetFileAttributes(Utf8ToWideString(absolute_path).c_str());
 }
 
 static DWORD GetFileAttributesForUtf8Path(const fml::UniqueFD& base_directory,
                                           const char* path) {
-  std::string full_path = GetFullHandlePath(base_directory) + "\\" + path;
+  std::string full_path = GetAbsolutePath(base_directory, path);
   return GetFileAttributesForUtf8Path(full_path.c_str());
 }
 
 std::string CreateTemporaryDirectory() {
   // Get the system temporary directory.
   auto temp_dir_container = GetTemporaryDirectoryPath();
-  if (temp_dir_container.size() == 0) {
+  if (temp_dir_container.empty()) {
     FML_DLOG(ERROR) << "Could not get system temporary directory.";
     return {};
   }
@@ -147,7 +136,7 @@ std::string CreateTemporaryDirectory() {
   stream << temp_dir_container << "\\" << uuid_str;
   auto temp_dir = stream.str();
 
-  auto dir_fd = OpenDirectory(WideStringToString(temp_dir).c_str(), true,
+  auto dir_fd = OpenDirectory(WideStringToUtf8(temp_dir).c_str(), true,
                               FilePermission::kReadWrite);
   if (!dir_fd.is_valid()) {
     FML_DLOG(ERROR) << "Could not get temporary directory file descriptor. "
@@ -155,7 +144,7 @@ std::string CreateTemporaryDirectory() {
     return {};
   }
 
-  return WideStringToString(std::move(temp_dir));
+  return WideStringToUtf8(std::move(temp_dir));
 }
 
 fml::UniqueFD OpenFile(const fml::UniqueFD& base_directory,
@@ -173,14 +162,14 @@ fml::UniqueFD OpenFile(const char* path,
     return {};
   }
 
-  auto file_name = StringToWideString({path});
+  auto file_name = Utf8ToWideString({path});
 
-  if (file_name.size() == 0) {
+  if (file_name.empty()) {
     return {};
   }
 
   const DWORD creation_disposition =
-      create_if_necessary ? CREATE_NEW : OPEN_EXISTING;
+      create_if_necessary ? OPEN_ALWAYS : OPEN_EXISTING;
 
   const DWORD flags = FILE_ATTRIBUTE_NORMAL;
 
@@ -216,9 +205,9 @@ fml::UniqueFD OpenDirectory(const char* path,
     return {};
   }
 
-  auto file_name = StringToWideString({path});
+  auto file_name = Utf8ToWideString({path});
 
-  if (file_name.size() == 0) {
+  if (file_name.empty()) {
     return {};
   }
 
@@ -249,22 +238,6 @@ fml::UniqueFD OpenDirectory(const char* path,
   if (handle == INVALID_HANDLE_VALUE) {
     return {};
   }
-
-#ifdef WINUWP
-  FILE_ID_INFO info;
-
-  BOOL result = GetFileInformationByHandleEx(
-      handle, FILE_INFO_BY_HANDLE_CLASS::FileIdInfo, &info,
-      sizeof(FILE_ID_INFO));
-
-  // Only cache if it is possible to get valid a fileinformation to extract the
-  // fileid to ensure correct handle versioning.
-  if (result) {
-    fml::internal::os_win::DirCacheEntry fc{file_name, info.FileId};
-
-    fml::internal::os_win::UniqueFDTraits::StoreCacheEntry(handle, fc);
-  }
-#endif
 
   return fml::UniqueFD{handle};
 }
@@ -314,7 +287,7 @@ bool IsFile(const std::string& path) {
 }
 
 bool UnlinkDirectory(const char* path) {
-  if (!::RemoveDirectory(StringToWideString(path).c_str())) {
+  if (!::RemoveDirectory(Utf8ToWideString(path).c_str())) {
     FML_DLOG(ERROR) << "Could not remove directory: '" << path << "'. "
                     << GetLastErrorMessage();
     return false;
@@ -324,7 +297,7 @@ bool UnlinkDirectory(const char* path) {
 
 bool UnlinkDirectory(const fml::UniqueFD& base_directory, const char* path) {
   if (!::RemoveDirectory(
-          StringToWideString(GetAbsolutePath(base_directory, path)).c_str())) {
+          Utf8ToWideString(GetAbsolutePath(base_directory, path)).c_str())) {
     FML_DLOG(ERROR) << "Could not remove directory: '" << path << "'. "
                     << GetLastErrorMessage();
     return false;
@@ -333,7 +306,7 @@ bool UnlinkDirectory(const fml::UniqueFD& base_directory, const char* path) {
 }
 
 bool UnlinkFile(const char* path) {
-  if (!::DeleteFile(StringToWideString(path).c_str())) {
+  if (!::DeleteFile(Utf8ToWideString(path).c_str())) {
     FML_DLOG(ERROR) << "Could not remove file: '" << path << "'. "
                     << GetLastErrorMessage();
     return false;
@@ -343,7 +316,7 @@ bool UnlinkFile(const char* path) {
 
 bool UnlinkFile(const fml::UniqueFD& base_directory, const char* path) {
   if (!::DeleteFile(
-          StringToWideString(GetAbsolutePath(base_directory, path)).c_str())) {
+          Utf8ToWideString(GetAbsolutePath(base_directory, path)).c_str())) {
     FML_DLOG(ERROR) << "Could not remove file: '" << path << "'. "
                     << GetLastErrorMessage();
     return false;
@@ -375,6 +348,8 @@ bool FileExists(const fml::UniqueFD& base_directory, const char* path) {
          INVALID_FILE_ATTRIBUTES;
 }
 
+// TODO(jonahwilliams): https://github.com/flutter/flutter/issues/102838 this is
+// not atomic on Windows.
 bool WriteAtomically(const fml::UniqueFD& base_directory,
                      const char* file_name,
                      const Mapping& mapping) {
@@ -383,15 +358,12 @@ bool WriteAtomically(const fml::UniqueFD& base_directory,
   }
 
   auto file_path = GetAbsolutePath(base_directory, file_name);
-  std::stringstream stream;
-  stream << file_path << ".temp";
-  auto temp_file_path = stream.str();
-
   auto temp_file =
-      OpenFile(temp_file_path.c_str(), true, FilePermission::kReadWrite);
+      OpenFile(file_path.c_str(), true, FilePermission::kReadWrite);
 
   if (!temp_file.is_valid()) {
-    FML_DLOG(ERROR) << "Could not create temporary file.";
+    FML_DLOG(ERROR) << "Could not create file: " << file_path.c_str() << " "
+                    << GetLastError() << " " << GetLastErrorMessage();
     return false;
   }
 
@@ -436,23 +408,14 @@ bool WriteAtomically(const fml::UniqueFD& base_directory,
 
   temp_file.reset();
 
-  if (!::MoveFile(StringToWideString(temp_file_path).c_str(),
-                  StringToWideString(file_path).c_str())) {
-    FML_DLOG(ERROR)
-        << "Could not replace temp file at correct path. File path: "
-        << file_path << ". Temp file path: " << temp_file_path << " "
-        << GetLastErrorMessage();
-    return false;
-  }
-
   return true;
 }
 
 bool VisitFiles(const fml::UniqueFD& directory, const FileVisitor& visitor) {
   std::string search_pattern = GetFullHandlePath(directory) + "\\*";
   WIN32_FIND_DATA find_file_data;
-  HANDLE find_handle = ::FindFirstFile(
-      StringToWideString(search_pattern).c_str(), &find_file_data);
+  HANDLE find_handle = ::FindFirstFile(Utf8ToWideString(search_pattern).c_str(),
+                                       &find_file_data);
 
   if (find_handle == INVALID_HANDLE_VALUE) {
     FML_DLOG(ERROR) << "Can't open the directory. Error: "
@@ -461,7 +424,7 @@ bool VisitFiles(const fml::UniqueFD& directory, const FileVisitor& visitor) {
   }
 
   do {
-    std::string filename = WideStringToString(find_file_data.cFileName);
+    std::string filename = WideStringToUtf8(find_file_data.cFileName);
     if (filename != "." && filename != "..") {
       if (!visitor(directory, filename)) {
         ::FindClose(find_handle);

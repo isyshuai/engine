@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_PLATFORM_ANDROID_PLATFORM_MESSAGE_HANDLER_H_
-#define SHELL_PLATFORM_ANDROID_PLATFORM_MESSAGE_HANDLER_H_
+#ifndef FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_MESSAGE_HANDLER_ANDROID_H_
+#define FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_MESSAGE_HANDLER_ANDROID_H_
 
 #include <jni.h>
 #include <memory>
@@ -20,6 +20,9 @@ class PlatformMessageHandlerAndroid : public PlatformMessageHandler {
   explicit PlatformMessageHandlerAndroid(
       const std::shared_ptr<PlatformViewAndroidJNI>& jni_facade);
   void HandlePlatformMessage(std::unique_ptr<PlatformMessage> message) override;
+  bool DoesHandlePlatformMessageOnPlatformThread() const override {
+    return false;
+  }
   void InvokePlatformMessageResponseCallback(
       int response_id,
       std::unique_ptr<fml::Mapping> mapping) override;
@@ -28,11 +31,11 @@ class PlatformMessageHandlerAndroid : public PlatformMessageHandler {
 
  private:
   const std::shared_ptr<PlatformViewAndroidJNI> jni_facade_;
-  int next_response_id_ = 1;
+  std::atomic<int> next_response_id_ = 1;
   std::unordered_map<int, fml::RefPtr<flutter::PlatformMessageResponse>>
       pending_responses_;
   std::mutex pending_responses_mutex_;
 };
 }  // namespace flutter
 
-#endif
+#endif  // FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_MESSAGE_HANDLER_ANDROID_H_

@@ -6,6 +6,7 @@
 #define FLUTTER_FML_MESSAGE_LOOP_TASK_QUEUES_H_
 
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <vector>
@@ -14,14 +15,13 @@
 #include "flutter/fml/delayed_task.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/memory/ref_counted.h"
-#include "flutter/fml/synchronization/shared_mutex.h"
 #include "flutter/fml/task_queue_id.h"
 #include "flutter/fml/task_source.h"
 #include "flutter/fml/wakeable.h"
 
 namespace fml {
 
-static const TaskQueueId _kUnmerged = TaskQueueId(TaskQueueId::kUnmerged);
+static const TaskQueueId kUnmerged = TaskQueueId(TaskQueueId::kUnmerged);
 
 /// A collection of tasks and observers associated with one TaskQueue.
 ///
@@ -39,7 +39,7 @@ class TaskQueueEntry {
   /// empty, this TaskQueue does not own any other TaskQueues.
   std::set<TaskQueueId> owner_of;
 
-  /// Identifies the TaskQueue that subsumes this TaskQueue. If it is _kUnmerged
+  /// Identifies the TaskQueue that subsumes this TaskQueue. If it is kUnmerged
   /// it indicates that this TaskQueue is not owned by any other TaskQueue.
   TaskQueueId subsumed_by;
 
@@ -62,12 +62,11 @@ enum class FlushType {
 /// This also wakes up the loop at the required times.
 /// \see fml::MessageLoop
 /// \see fml::Wakeable
-class MessageLoopTaskQueues
-    : public fml::RefCountedThreadSafe<MessageLoopTaskQueues> {
+class MessageLoopTaskQueues {
  public:
   // Lifecycle.
 
-  static fml::RefPtr<MessageLoopTaskQueues> GetInstance();
+  static MessageLoopTaskQueues* GetInstance();
 
   TaskQueueId CreateTaskQueue();
 
@@ -152,18 +151,13 @@ class MessageLoopTaskQueues
 
   fml::TimePoint GetNextWakeTimeUnlocked(TaskQueueId queue_id) const;
 
-  static std::mutex creation_mutex_;
-  static fml::RefPtr<MessageLoopTaskQueues> instance_;
-
   mutable std::mutex queue_mutex_;
   std::map<TaskQueueId, std::unique_ptr<TaskQueueEntry>> queue_entries_;
 
-  size_t task_queue_id_counter_;
+  size_t task_queue_id_counter_ = 0;
 
   std::atomic_int order_;
 
-  FML_FRIEND_MAKE_REF_COUNTED(MessageLoopTaskQueues);
-  FML_FRIEND_REF_COUNTED_THREAD_SAFE(MessageLoopTaskQueues);
   FML_DISALLOW_COPY_ASSIGN_AND_MOVE(MessageLoopTaskQueues);
 };
 

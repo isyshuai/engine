@@ -10,16 +10,12 @@
 #include <utility>
 #include <vector>
 
+#include "flutter/assets/native_assets.h"
 #include "flutter/common/settings.h"
-#include "flutter/fml/make_copyable.h"
 #include "flutter/fml/trace_event.h"
-#include "flutter/lib/snapshot/snapshot.h"
 #include "flutter/lib/ui/text/font_collection.h"
 #include "flutter/shell/common/animator.h"
-#include "flutter/shell/common/platform_view.h"
-#include "flutter/shell/common/shell.h"
 #include "rapidjson/document.h"
-#include "third_party/dart/runtime/include/dart_tools_api.h"
 
 namespace flutter {
 
@@ -39,22 +35,25 @@ fml::MallocMapping MakeMapping(const std::string& str) {
 Engine::Engine(
     Delegate& delegate,
     const PointerDataDispatcherMaker& dispatcher_maker,
-    std::shared_ptr<fml::ConcurrentTaskRunner> image_decoder_task_runner,
-    TaskRunners task_runners,
-    Settings settings,
+    const std::shared_ptr<fml::ConcurrentTaskRunner>& image_decoder_task_runner,
+    const TaskRunners& task_runners,
+    const Settings& settings,
     std::unique_ptr<Animator> animator,
-    fml::WeakPtr<IOManager> io_manager,
+    const fml::WeakPtr<IOManager>& io_manager,
     const std::shared_ptr<FontCollection>& font_collection,
-    std::unique_ptr<RuntimeController> runtime_controller)
+    std::unique_ptr<RuntimeController> runtime_controller,
+    const std::shared_ptr<fml::SyncSwitch>& gpu_disabled_switch)
     : delegate_(delegate),
-      settings_(std::move(settings)),
+      settings_(settings),
       animator_(std::move(animator)),
       runtime_controller_(std::move(runtime_controller)),
-      activity_running_(true),
-      have_surface_(false),
       font_collection_(font_collection),
-      image_decoder_(task_runners, image_decoder_task_runner, io_manager),
-      task_runners_(std::move(task_runners)),
+      image_decoder_(ImageDecoder::Make(settings_,
+                                        task_runners,
+                                        image_decoder_task_runner,
+                                        io_manager,
+                                        gpu_disabled_switch)),
+      task_runners_(task_runners),
       weak_factory_(this) {
   pointer_data_dispatcher_ = dispatcher_maker(*this);
 }
@@ -63,14 +62,15 @@ Engine::Engine(Delegate& delegate,
                const PointerDataDispatcherMaker& dispatcher_maker,
                DartVM& vm,
                fml::RefPtr<const DartSnapshot> isolate_snapshot,
-               TaskRunners task_runners,
+               const TaskRunners& task_runners,
                const PlatformData& platform_data,
-               Settings settings,
+               const Settings& settings,
                std::unique_ptr<Animator> animator,
                fml::WeakPtr<IOManager> io_manager,
-               fml::RefPtr<SkiaUnrefQueue> unref_queue,
-               fml::WeakPtr<SnapshotDelegate> snapshot_delegate,
-               std::shared_ptr<VolatilePathTracker> volatile_path_tracker)
+               const fml::RefPtr<SkiaUnrefQueue>& unref_queue,
+               fml::TaskRunnerAffineWeakPtr<SnapshotDelegate> snapshot_delegate,
+               const std::shared_ptr<fml::SyncSwitch>& gpu_disabled_switch,
+               impeller::RuntimeStageBackend runtime_stage_type)
     : Engine(delegate,
              dispatcher_maker,
              vm.GetConcurrentWorkerTaskRunner(),
@@ -79,7 +79,8 @@ Engine::Engine(Delegate& delegate,
              std::move(animator),
              io_manager,
              std::make_shared<FontCollection>(),
-             nullptr) {
+             nullptr,
+             gpu_disabled_switch) {
   runtime_controller_ = std::make_unique<RuntimeController>(
       *this,                                 // runtime delegate
       &vm,                                   // VM
@@ -93,22 +94,28 @@ Engine::Engine(Delegate& delegate,
           task_runners_,                           // task runners
           std::move(snapshot_delegate),            // snapshot delegate
           std::move(io_manager),                   // io manager
-          std::move(unref_queue),                  // Skia unref queue
-          image_decoder_.GetWeakPtr(),             // image decoder
+          unref_queue,                             // Skia unref queue
+          image_decoder_->GetWeakPtr(),            // image decoder
           image_generator_registry_.GetWeakPtr(),  // image generator registry
           settings_.advisory_script_uri,           // advisory script uri
           settings_.advisory_script_entrypoint,    // advisory script entrypoint
-          std::move(volatile_path_tracker),        // volatile path tracker
+          settings_
+              .skia_deterministic_rendering_on_cpu,  // deterministic rendering
+          vm.GetConcurrentWorkerTaskRunner(),        // concurrent task runner
+          settings_.enable_impeller,                 // enable impeller
+          runtime_stage_type,                        // runtime stage type
       });
 }
 
 std::unique_ptr<Engine> Engine::Spawn(
     Delegate& delegate,
     const PointerDataDispatcherMaker& dispatcher_maker,
-    Settings settings,
+    const Settings& settings,
     std::unique_ptr<Animator> animator,
     const std::string& initial_route,
-    fml::WeakPtr<IOManager> io_manager) const {
+    const fml::WeakPtr<IOManager>& io_manager,
+    fml::TaskRunnerAffineWeakPtr<SnapshotDelegate> snapshot_delegate,
+    const std::shared_ptr<fml::SyncSwitch>& gpu_disabled_switch) const {
   auto result = std::make_unique<Engine>(
       /*delegate=*/delegate,
       /*dispatcher_maker=*/dispatcher_maker,
@@ -119,19 +126,22 @@ std::unique_ptr<Engine> Engine::Spawn(
       /*animator=*/std::move(animator),
       /*io_manager=*/io_manager,
       /*font_collection=*/font_collection_,
-      /*runtime_controller=*/nullptr);
+      /*runtime_controller=*/nullptr,
+      /*gpu_disabled_switch=*/gpu_disabled_switch);
   result->runtime_controller_ = runtime_controller_->Spawn(
-      *result,                               // runtime delegate
-      settings_.advisory_script_uri,         // advisory script uri
-      settings_.advisory_script_entrypoint,  // advisory script entrypoint
-      settings_.idle_notification_callback,  // idle notification callback
-      settings_.isolate_create_callback,     // isolate create callback
-      settings_.isolate_shutdown_callback,   // isolate shutdown callback
-      settings_.persistent_isolate_data,     // persistent isolate data
-      io_manager,                            // io_manager
-      result->GetImageDecoderWeakPtr()       // imageDecoder
-  );
+      /*p_client=*/*result,
+      /*advisory_script_uri=*/settings.advisory_script_uri,
+      /*advisory_script_entrypoint=*/settings.advisory_script_entrypoint,
+      /*idle_notification_callback=*/settings.idle_notification_callback,
+      /*isolate_create_callback=*/settings.isolate_create_callback,
+      /*isolate_shutdown_callback=*/settings.isolate_shutdown_callback,
+      /*persistent_isolate_data=*/settings.persistent_isolate_data,
+      /*io_manager=*/io_manager,
+      /*image_decoder=*/result->GetImageDecoderWeakPtr(),
+      /*image_generator_registry=*/result->GetImageGeneratorRegistry(),
+      /*snapshot_delegate=*/std::move(snapshot_delegate));
   result->initial_route_ = initial_route;
+  result->asset_manager_ = asset_manager_;
   return result;
 }
 
@@ -151,7 +161,7 @@ std::shared_ptr<AssetManager> Engine::GetAssetManager() {
 }
 
 fml::WeakPtr<ImageDecoder> Engine::GetImageDecoderWeakPtr() {
-  return image_decoder_.GetWeakPtr();
+  return image_decoder_->GetWeakPtr();
 }
 
 fml::WeakPtr<ImageGeneratorRegistry> Engine::GetImageGeneratorRegistry() {
@@ -159,8 +169,9 @@ fml::WeakPtr<ImageGeneratorRegistry> Engine::GetImageGeneratorRegistry() {
 }
 
 bool Engine::UpdateAssetManager(
-    std::shared_ptr<AssetManager> new_asset_manager) {
-  if (asset_manager_ == new_asset_manager) {
+    const std::shared_ptr<AssetManager>& new_asset_manager) {
+  if (asset_manager_ && new_asset_manager &&
+      *asset_manager_ == *new_asset_manager) {
     return false;
   }
 
@@ -171,11 +182,18 @@ bool Engine::UpdateAssetManager(
   }
 
   // Using libTXT as the text engine.
-  font_collection_->RegisterFonts(asset_manager_);
+  if (settings_.use_asset_fonts) {
+    font_collection_->RegisterFonts(asset_manager_);
+  }
 
   if (settings_.use_test_fonts) {
     font_collection_->RegisterTestFonts();
   }
+
+  if (native_assets_manager_ == nullptr) {
+    native_assets_manager_ = std::make_shared<NativeAssetsManager>();
+  }
+  native_assets_manager_->RegisterNativeAssets(asset_manager_);
 
   return true;
 }
@@ -226,7 +244,8 @@ Engine::RunStatus Engine::Run(RunConfiguration configuration) {
           configuration.GetEntrypoint(),             //
           configuration.GetEntrypointLibrary(),      //
           configuration.GetEntrypointArgs(),         //
-          configuration.TakeIsolateConfiguration())  //
+          configuration.TakeIsolateConfiguration(),  //
+          native_assets_manager_)                    //
   ) {
     return RunStatus::Failure;
   }
@@ -243,20 +262,20 @@ Engine::RunStatus Engine::Run(RunConfiguration configuration) {
 }
 
 void Engine::BeginFrame(fml::TimePoint frame_time, uint64_t frame_number) {
-  TRACE_EVENT0("flutter", "Engine::BeginFrame");
   runtime_controller_->BeginFrame(frame_time, frame_number);
 }
 
 void Engine::ReportTimings(std::vector<int64_t> timings) {
-  TRACE_EVENT0("flutter", "Engine::ReportTimings");
   runtime_controller_->ReportTimings(std::move(timings));
 }
 
-void Engine::NotifyIdle(int64_t deadline) {
-  auto trace_event = std::to_string(deadline - Dart_TimelineGetMicros());
-  TRACE_EVENT1("flutter", "Engine::NotifyIdle", "deadline_now_delta",
-               trace_event.c_str());
+void Engine::NotifyIdle(fml::TimeDelta deadline) {
   runtime_controller_->NotifyIdle(deadline);
+}
+
+void Engine::NotifyDestroyed() {
+  TRACE_EVENT0("flutter", "Engine::NotifyDestroyed");
+  runtime_controller_->NotifyDestroyed();
 }
 
 std::optional<uint32_t> Engine::GetUIIsolateReturnCode() {
@@ -275,35 +294,28 @@ bool Engine::UIIsolateHasLivePorts() {
   return runtime_controller_->HasLivePorts();
 }
 
+bool Engine::UIIsolateHasPendingMicrotasks() {
+  return runtime_controller_->HasPendingMicrotasks();
+}
+
 tonic::DartErrorHandleType Engine::GetUIIsolateLastError() {
   return runtime_controller_->GetLastError();
 }
 
-void Engine::OnOutputSurfaceCreated() {
-  have_surface_ = true;
+void Engine::AddView(int64_t view_id,
+                     const ViewportMetrics& view_metrics,
+                     std::function<void(bool added)> callback) {
+  runtime_controller_->AddView(view_id, view_metrics, std::move(callback));
+}
+
+bool Engine::RemoveView(int64_t view_id) {
+  return runtime_controller_->RemoveView(view_id);
+}
+
+void Engine::SetViewportMetrics(int64_t view_id,
+                                const ViewportMetrics& metrics) {
+  runtime_controller_->SetViewportMetrics(view_id, metrics);
   ScheduleFrame();
-}
-
-void Engine::OnOutputSurfaceDestroyed() {
-  have_surface_ = false;
-  StopAnimator();
-}
-
-void Engine::SetViewportMetrics(const ViewportMetrics& metrics) {
-  bool dimensions_changed =
-      viewport_metrics_.physical_height != metrics.physical_height ||
-      viewport_metrics_.physical_width != metrics.physical_width ||
-      viewport_metrics_.device_pixel_ratio != metrics.device_pixel_ratio;
-  viewport_metrics_ = metrics;
-  runtime_controller_->SetViewportMetrics(viewport_metrics_);
-  if (animator_) {
-    if (dimensions_changed) {
-      animator_->SetDimensionChangePending();
-    }
-    if (have_surface_) {
-      ScheduleFrame();
-    }
-  }
 }
 
 void Engine::DispatchPlatformMessage(std::unique_ptr<PlatformMessage> message) {
@@ -338,23 +350,15 @@ bool Engine::HandleLifecyclePlatformMessage(PlatformMessage* message) {
   const auto& data = message->data();
   std::string state(reinterpret_cast<const char*>(data.GetMapping()),
                     data.GetSize());
-  if (state == "AppLifecycleState.paused" ||
-      state == "AppLifecycleState.detached") {
-    activity_running_ = false;
-    StopAnimator();
-  } else if (state == "AppLifecycleState.resumed" ||
-             state == "AppLifecycleState.inactive") {
-    activity_running_ = true;
-    StartAnimatorIfPossible();
-  }
 
   // Always schedule a frame when the app does become active as per API
   // recommendation
   // https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1622956-applicationdidbecomeactive?language=objc
-  if (state == "AppLifecycleState.resumed" && have_surface_) {
+  if (state == "AppLifecycleState.resumed" ||
+      state == "AppLifecycleState.inactive") {
     ScheduleFrame();
   }
-  runtime_controller_->SetLifecycleState(state);
+  runtime_controller_->SetInitialLifecycleState(state);
   // Always forward these messages to the framework by returning false.
   return false;
 }
@@ -375,7 +379,7 @@ bool Engine::HandleNavigationPlatformMessage(
     return false;
   }
   auto route = root.FindMember("args");
-  initial_route_ = std::move(route->value.GetString());
+  initial_route_ = route->value.GetString();
   return true;
 }
 
@@ -426,8 +430,7 @@ void Engine::HandleSettingsPlatformMessage(PlatformMessage* message) {
   const auto& data = message->data();
   std::string jsonData(reinterpret_cast<const char*>(data.GetMapping()),
                        data.GetSize());
-  if (runtime_controller_->SetUserSettingsData(std::move(jsonData)) &&
-      have_surface_) {
+  if (runtime_controller_->SetUserSettingsData(jsonData)) {
     ScheduleFrame();
   }
 }
@@ -435,15 +438,18 @@ void Engine::HandleSettingsPlatformMessage(PlatformMessage* message) {
 void Engine::DispatchPointerDataPacket(
     std::unique_ptr<PointerDataPacket> packet,
     uint64_t trace_flow_id) {
-  TRACE_EVENT0("flutter", "Engine::DispatchPointerDataPacket");
+  TRACE_EVENT0_WITH_FLOW_IDS("flutter", "Engine::DispatchPointerDataPacket",
+                             /*flow_id_count=*/1,
+                             /*flow_ids=*/&trace_flow_id);
   TRACE_FLOW_STEP("flutter", "PointerEvent", trace_flow_id);
   pointer_data_dispatcher_->DispatchPacket(std::move(packet), trace_flow_id);
 }
 
-void Engine::DispatchSemanticsAction(int id,
+void Engine::DispatchSemanticsAction(int node_id,
                                      SemanticsAction action,
                                      fml::MallocMapping args) {
-  runtime_controller_->DispatchSemanticsAction(id, action, std::move(args));
+  runtime_controller_->DispatchSemanticsAction(node_id, action,
+                                               std::move(args));
 }
 
 void Engine::SetSemanticsEnabled(bool enabled) {
@@ -454,16 +460,6 @@ void Engine::SetAccessibilityFeatures(int32_t flags) {
   runtime_controller_->SetAccessibilityFeatures(flags);
 }
 
-void Engine::StopAnimator() {
-  animator_->Stop();
-}
-
-void Engine::StartAnimatorIfPossible() {
-  if (activity_running_ && have_surface_) {
-    animator_->Start();
-  }
-}
-
 std::string Engine::DefaultRouteName() {
   if (!initial_route_.empty()) {
     return initial_route_;
@@ -471,23 +467,27 @@ std::string Engine::DefaultRouteName() {
   return "/";
 }
 
-void Engine::ScheduleFrame(bool regenerate_layer_tree) {
-  StartAnimatorIfPossible();
-  animator_->RequestFrame(regenerate_layer_tree);
+void Engine::ScheduleFrame(bool regenerate_layer_trees) {
+  animator_->RequestFrame(regenerate_layer_trees);
 }
 
-void Engine::Render(std::unique_ptr<flutter::LayerTree> layer_tree) {
+void Engine::OnAllViewsRendered() {
+  animator_->OnAllViewsRendered();
+}
+
+void Engine::Render(int64_t view_id,
+                    std::unique_ptr<flutter::LayerTree> layer_tree,
+                    float device_pixel_ratio) {
   if (!layer_tree) {
     return;
   }
 
   // Ensure frame dimensions are sane.
-  if (layer_tree->frame_size().isEmpty() ||
-      layer_tree->device_pixel_ratio() <= 0.0f) {
+  if (layer_tree->frame_size().isEmpty() || device_pixel_ratio <= 0.0f) {
     return;
   }
 
-  animator_->Render(std::move(layer_tree));
+  animator_->Render(view_id, std::move(layer_tree), device_pixel_ratio);
 }
 
 void Engine::UpdateSemantics(SemanticsNodeUpdates update,
@@ -515,6 +515,11 @@ void Engine::UpdateIsolateDescription(const std::string isolate_name,
 std::unique_ptr<std::vector<std::string>> Engine::ComputePlatformResolvedLocale(
     const std::vector<std::string>& supported_locale_data) {
   return delegate_.ComputePlatformResolvedLocale(supported_locale_data);
+}
+
+double Engine::GetScaledFontSize(double unscaled_font_size,
+                                 int configuration_id) const {
+  return delegate_.GetScaledFontSize(unscaled_font_size, configuration_id);
 }
 
 void Engine::SetNeedsReportTimings(bool needs_reporting) {
@@ -577,6 +582,15 @@ void Engine::RequestDartDeferredLibrary(intptr_t loading_unit_id) {
   return delegate_.RequestDartDeferredLibrary(loading_unit_id);
 }
 
+std::weak_ptr<PlatformMessageHandler> Engine::GetPlatformMessageHandler()
+    const {
+  return delegate_.GetPlatformMessageHandler();
+}
+
+void Engine::SendChannelUpdate(std::string name, bool listening) {
+  delegate_.OnEngineChannelUpdate(std::move(name), listening);
+}
+
 void Engine::LoadDartDeferredLibrary(
     intptr_t loading_unit_id,
     std::unique_ptr<const fml::Mapping> snapshot_data,
@@ -592,7 +606,7 @@ void Engine::LoadDartDeferredLibrary(
 }
 
 void Engine::LoadDartDeferredLibraryError(intptr_t loading_unit_id,
-                                          const std::string error_message,
+                                          const std::string& error_message,
                                           bool transient) {
   if (runtime_controller_->IsRootIsolateRunning()) {
     runtime_controller_->LoadDartDeferredLibraryError(loading_unit_id,
@@ -600,8 +614,17 @@ void Engine::LoadDartDeferredLibraryError(intptr_t loading_unit_id,
   }
 }
 
-const VsyncWaiter& Engine::GetVsyncWaiter() const {
+const std::weak_ptr<VsyncWaiter> Engine::GetVsyncWaiter() const {
   return animator_->GetVsyncWaiter();
+}
+
+void Engine::SetDisplays(const std::vector<DisplayData>& displays) {
+  runtime_controller_->SetDisplays(displays);
+  ScheduleFrame();
+}
+
+void Engine::ShutdownPlatformIsolates() {
+  runtime_controller_->ShutdownPlatformIsolates();
 }
 
 }  // namespace flutter

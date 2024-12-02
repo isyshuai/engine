@@ -17,7 +17,7 @@ namespace flutter {
 class PlatformViewAndroidJNIImpl final : public PlatformViewAndroidJNI {
  public:
   explicit PlatformViewAndroidJNIImpl(
-      fml::jni::JavaObjectWeakGlobalRef java_object);
+      const fml::jni::JavaObjectWeakGlobalRef& java_object);
 
   ~PlatformViewAndroidJNIImpl() override;
 
@@ -45,12 +45,22 @@ class PlatformViewAndroidJNIImpl final : public PlatformViewAndroidJNI {
   void SurfaceTextureAttachToGLContext(JavaLocalRef surface_texture,
                                        int textureId) override;
 
+  bool SurfaceTextureShouldUpdate(JavaLocalRef surface_texture) override;
+
   void SurfaceTextureUpdateTexImage(JavaLocalRef surface_texture) override;
 
-  void SurfaceTextureGetTransformMatrix(JavaLocalRef surface_texture,
-                                        SkMatrix& transform) override;
+  SkM44 SurfaceTextureGetTransformMatrix(JavaLocalRef surface_texture) override;
 
   void SurfaceTextureDetachFromGLContext(JavaLocalRef surface_texture) override;
+
+  JavaLocalRef ImageProducerTextureEntryAcquireLatestImage(
+      JavaLocalRef image_texture_entry) override;
+
+  JavaLocalRef ImageGetHardwareBuffer(JavaLocalRef image) override;
+
+  void ImageClose(JavaLocalRef image) override;
+
+  void HardwareBufferClose(JavaLocalRef hardware_buffer) override;
 
   void FlutterViewOnDisplayPlatformView(int view_id,
                                         int x,
@@ -82,7 +92,16 @@ class PlatformViewAndroidJNIImpl final : public PlatformViewAndroidJNI {
 
   double GetDisplayRefreshRate() override;
 
+  double GetDisplayWidth() override;
+
+  double GetDisplayHeight() override;
+
+  double GetDisplayDensity() override;
+
   bool RequestDartDeferredLibrary(int loading_unit_id) override;
+
+  double FlutterViewGetScaledFontSize(double unscaled_font_size,
+                                      int configuration_id) const override;
 
  private:
   // Reference to FlutterJNI object.

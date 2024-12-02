@@ -4,10 +4,12 @@
 
 #include "flutter/testing/dart_isolate_runner.h"
 
+#include <utility>
+
 #include "flutter/runtime/isolate_configuration.h"
 
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
+
 AutoIsolateShutdown::AutoIsolateShutdown(std::shared_ptr<DartIsolate> isolate,
                                          fml::RefPtr<fml::TaskRunner> runner)
     : isolate_(std::move(isolate)), runner_(std::move(runner)) {}
@@ -42,7 +44,7 @@ void AutoIsolateShutdown::Shutdown() {
 }
 
 [[nodiscard]] bool AutoIsolateShutdown::RunInIsolateScope(
-    std::function<bool(void)> closure) {
+    const std::function<bool(void)>& closure) {
   if (!IsValid()) {
     return false;
   }
@@ -70,7 +72,7 @@ std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolateOnUITaskRunner(
     const std::vector<std::string>& args,
     const std::string& kernel_file_path,
     fml::WeakPtr<IOManager> io_manager,
-    std::shared_ptr<VolatilePathTracker> volatile_path_tracker) {
+    std::unique_ptr<PlatformConfiguration> platform_configuration) {
   FML_CHECK(task_runners.GetUITaskRunner()->RunsTasksOnCurrentThread());
 
   if (!vm_ref) {
@@ -117,16 +119,17 @@ std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolateOnUITaskRunner(
   auto isolate_configuration =
       IsolateConfiguration::InferFromSettings(settings);
 
-  UIDartState::Context context(std::move(task_runners));
-  context.io_manager = io_manager;
+  UIDartState::Context context(task_runners);
+  context.io_manager = std::move(io_manager);
   context.advisory_script_uri = "main.dart";
   context.advisory_script_entrypoint = entrypoint.c_str();
+  context.enable_impeller = p_settings.enable_impeller;
 
   auto isolate =
       DartIsolate::CreateRunningRootIsolate(
           settings,                            // settings
           vm_data->GetIsolateSnapshot(),       // isolate snapshot
-          nullptr,                             // platform configuration
+          std::move(platform_configuration),   // platform configuration
           DartIsolate::Flags{},                // flags
           nullptr,                             // root isolate create callback
           settings.isolate_create_callback,    // isolate create callback
@@ -144,8 +147,8 @@ std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolateOnUITaskRunner(
     return nullptr;
   }
 
-  return std::make_unique<AutoIsolateShutdown>(isolate,
-                                               task_runners.GetUITaskRunner());
+  return std::make_unique<AutoIsolateShutdown>(
+      isolate, context.task_runners.GetUITaskRunner());
 }
 
 std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolate(
@@ -156,19 +159,18 @@ std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolate(
     const std::vector<std::string>& args,
     const std::string& kernel_file_path,
     fml::WeakPtr<IOManager> io_manager,
-    std::shared_ptr<VolatilePathTracker> volatile_path_tracker) {
+    std::unique_ptr<PlatformConfiguration> platform_configuration) {
   std::unique_ptr<AutoIsolateShutdown> result;
   fml::AutoResetWaitableEvent latch;
   fml::TaskRunner::RunNowOrPostTask(
       task_runners.GetUITaskRunner(), fml::MakeCopyable([&]() mutable {
         result = RunDartCodeInIsolateOnUITaskRunner(
             vm_ref, settings, task_runners, entrypoint, args, kernel_file_path,
-            io_manager, std::move(volatile_path_tracker));
+            io_manager, std::move(platform_configuration));
         latch.Signal();
       }));
   latch.Wait();
   return result;
 }
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing

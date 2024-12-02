@@ -7,21 +7,11 @@
 
 #include <gdk/gdk.h>
 
-#include "flutter/shell/platform/linux/fl_key_responder.h"
-#include "flutter/shell/platform/linux/fl_text_input_plugin.h"
-
-/**
- * FlKeyboardManagerRedispatcher:
- * @event: the pointer to the event to dispatch.
- *
- * The signature for a callback with which a #FlKeyboardManager redispatches
- * key events that are not handled by anyone.
- **/
-typedef void (*FlKeyboardManagerRedispatcher)(gpointer event);
+#include "flutter/shell/platform/linux/fl_keyboard_view_delegate.h"
+#include "flutter/shell/platform/linux/public/flutter_linux/fl_engine.h"
 
 G_BEGIN_DECLS
 
-#define FL_TYPE_KEYBOARD_MANAGER fl_keyboard_manager_get_type()
 G_DECLARE_FINAL_TYPE(FlKeyboardManager,
                      fl_keyboard_manager,
                      FL,
@@ -31,68 +21,42 @@ G_DECLARE_FINAL_TYPE(FlKeyboardManager,
 /**
  * FlKeyboardManager:
  *
- * A hub that manages how key events are dispatched to various processing
- * objects of Flutter, or possibly back to the system.
+ * Processes keyboard events and cooperate with `TextInputManager`.
  *
- * This class manage one or more objects of #FlKeyResponder, as well as a
- * #TextInputPlugin.
+ * A keyboard event goes through a few sections, each can choose to handle the
+ * event, and only unhandled events can move to the next section:
  *
- * An event that is received by #fl_keyboard_manager_handle_event is first
- * dispatched to *all* responders. Each responder responds *ascynchronously*
- * with a boolean, indicating whether it handles the event.
- *
- * An event that is not handled by any responders is then passed to to the
- * #TextInputPlugin, which responds *synchronously* with a boolean, indicating
- * whether it handles the event.
- *
- * If no processing objects handle the event, the event is then "redispatched":
- * sent back to the system using #redispatch_callback.
- *
- * Preventing responders from receiving events is not supported, because in
- * reality this class will only support 2 hardcoded ones (channel and
- * embedder), where the only purpose of supporting two is to support the legacy
- * API (channel) during the deprecation window, after which the channel
- * responder should be removed.
+ * - Keyboard: Dispatch to the embedder responder and the channel responder
+ *   simultaneously. After both responders have responded (asynchronously), the
+ *   event is considered handled if either responder handles it.
+ * - Text input: Events are sent to IM filter (usually owned by
+ *   `TextInputManager`) and are handled synchronously.
+ * - Redispatching: Events are inserted back to the system for redispatching.
  */
 
 /**
  * fl_keyboard_manager_new:
- * @text_input_plugin: the #FlTextInputPlugin to send key events to if the
- * framework doesn't handle them. This object will be managed and freed by
- * #FlKeyboardManager.
- * @redispatch_callback: how the events should be sent if no processing
- * objects handle the event. Typically a function that calls #gdk_event_put
- * on #FlKeyEvent::origin.
+ * @engine: an #FlEngine.
+ * @view_delegate: An interface that the manager requires to communicate with
+ * the platform. Usually implemented by FlView.
  *
- * Create a new #FlKeyboardManager. The text input plugin must be specified
- * now, while the responders should be added later with
- * #fl_keyboard_manager_add_responder.
+ * Create a new #FlKeyboardManager.
  *
  * Returns: a new #FlKeyboardManager.
  */
 FlKeyboardManager* fl_keyboard_manager_new(
-    FlTextInputPlugin* text_input_plugin,
-    FlKeyboardManagerRedispatcher redispatch_callback);
-
-/**
- * fl_keyboard_manager_add_responder:
- * @manager: the #FlKeyboardManager self.
- * @responder: the new responder to be added.
- *
- * Add a new #FlKeyResponder to the #FlKeyboardManager. Responders added
- * earlier will receive events earlier.
- */
-void fl_keyboard_manager_add_responder(FlKeyboardManager* manager,
-                                       FlKeyResponder* responder);
+    FlEngine* engine,
+    FlKeyboardViewDelegate* view_delegate);
 
 /**
  * fl_keyboard_manager_handle_event:
  * @manager: the #FlKeyboardManager self.
- * @event: the event to be dispatched. This event will be managed and
- * released by #FlKeyboardManager.
+ * @event: the event to be dispatched. It is usually a wrap of a GdkEventKey.
+ * This event will be managed and released by #FlKeyboardManager.
  *
- * Add a new #FlKeyResponder to the #FlKeyboardManager. Responders added
- * earlier will receive events earlier.
+ * Make the manager process a system key event. This might eventually send
+ * messages to the framework, trigger text input effects, or redispatch the
+ * event back to the system.
  */
 gboolean fl_keyboard_manager_handle_event(FlKeyboardManager* manager,
                                           FlKeyEvent* event);
@@ -101,12 +65,102 @@ gboolean fl_keyboard_manager_handle_event(FlKeyboardManager* manager,
  * fl_keyboard_manager_is_state_clear:
  * @manager: the #FlKeyboardManager self.
  *
- * Whether the manager's various states are cleared, i.e. no pending events
- * for redispatching or for responding. This is mostly used in unittests.
+ * A debug-only method that queries whether the manager's various states are
+ * cleared, i.e. no pending events for redispatching or for responding.
  *
  * Returns: true if the manager's various states are cleared.
  */
 gboolean fl_keyboard_manager_is_state_clear(FlKeyboardManager* manager);
+
+/**
+ * fl_keyboard_manager_sync_modifier_if_needed:
+ * @manager: the #FlKeyboardManager self.
+ * @state: the state of the modifiers mask.
+ * @event_time: the time attribute of the incoming GDK event.
+ *
+ * If needed, synthesize modifier keys up and down event by comparing their
+ * current pressing states with the given modifiers mask.
+ */
+void fl_keyboard_manager_sync_modifier_if_needed(FlKeyboardManager* manager,
+                                                 guint state,
+                                                 double event_time);
+
+/**
+ * fl_keyboard_manager_get_pressed_state:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Returns the keyboard pressed state. The hash table contains one entry per
+ * pressed keys, mapping from the logical key to the physical key.*
+ */
+GHashTable* fl_keyboard_manager_get_pressed_state(FlKeyboardManager* manager);
+
+typedef void (*FlKeyboardManagerSendKeyEventHandler)(
+    const FlutterKeyEvent* event,
+    FlutterKeyEventCallback callback,
+    void* callback_user_data,
+    gpointer user_data);
+
+/**
+ * fl_keyboard_manager_set_send_key_event_handler:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Set the handler for sending events, for testing purposes only.
+ */
+void fl_keyboard_manager_set_send_key_event_handler(
+    FlKeyboardManager* manager,
+    FlKeyboardManagerSendKeyEventHandler send_key_event_handler,
+    gpointer user_data);
+
+typedef guint (*FlKeyboardManagerLookupKeyHandler)(const GdkKeymapKey* key,
+                                                   gpointer user_data);
+
+/**
+ * fl_keyboard_manager_set_lookup_key_handler:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Set the handler for key lookup, for testing purposes only.
+ */
+void fl_keyboard_manager_set_lookup_key_handler(
+    FlKeyboardManager* manager,
+    FlKeyboardManagerLookupKeyHandler lookup_key_handler,
+    gpointer user_data);
+
+/**
+ * fl_keyboard_manager_notify_layout_changed:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Notify the manager the keyboard layout has changed, for testing purposes
+ * only.
+ */
+void fl_keyboard_manager_notify_layout_changed(FlKeyboardManager* manager);
+
+typedef void (*FlKeyboardManagerRedispatchEventHandler)(FlKeyEvent* event,
+                                                        gpointer user_data);
+
+/**
+ * fl_keyboard_manager_set_redispatch_handler:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Set the handler for redispatches, for testing purposes only.
+ */
+void fl_keyboard_manager_set_redispatch_handler(
+    FlKeyboardManager* manager,
+    FlKeyboardManagerRedispatchEventHandler redispatch_handler,
+    gpointer user_data);
+
+typedef GHashTable* (*FlKeyboardManagerGetPressedStateHandler)(
+    gpointer user_data);
+
+/**
+ * fl_keyboard_manager_set_get_pressed_state_handler:
+ * @manager: the #FlKeyboardManager self.
+ *
+ * Set the handler for gettting the keyboard state, for testing purposes only.
+ */
+void fl_keyboard_manager_set_get_pressed_state_handler(
+    FlKeyboardManager* manager,
+    FlKeyboardManagerGetPressedStateHandler get_pressed_state_handler,
+    gpointer user_data);
 
 G_END_DECLS
 

@@ -4,9 +4,28 @@
 
 #include "flutter/shell/gpu/gpu_surface_gl_delegate.h"
 
+#include "flutter/fml/build_config.h"
+
 #include <cstring>
 
-#include "third_party/skia/include/gpu/gl/GrGLAssembleInterface.h"
+#include "third_party/skia/include/gpu/ganesh/gl/GrGLAssembleInterface.h"
+#include "third_party/skia/include/gpu/ganesh/gl/GrGLInterface.h"
+
+#if defined(FML_OS_ANDROID)
+#include "third_party/skia/include/gpu/ganesh/gl/egl/GrGLMakeEGLInterface.h"
+#endif
+
+#if defined(FML_OS_LINUX) && defined(SK_GLX)
+#include "third_party/skia/include/gpu/ganesh/gl/glx/GrGLMakeGLXInterface.h"
+#endif
+
+#if defined(FML_OS_MACOSX)
+#include "third_party/skia/include/gpu/ganesh/gl/mac/GrGLMakeMacInterface.h"
+#endif
+
+#if defined(FML_OS_IOS)
+#include "third_party/skia/include/gpu/ganesh/gl/ios/GrGLMakeIOSInterface.h"
+#endif
 
 namespace flutter {
 
@@ -35,12 +54,16 @@ GPUSurfaceGLDelegate::GLProcResolver GPUSurfaceGLDelegate::GetGLProcResolver()
 }
 
 static bool IsProcResolverOpenGLES(
-    GPUSurfaceGLDelegate::GLProcResolver proc_resolver) {
+    const GPUSurfaceGLDelegate::GLProcResolver& proc_resolver) {
   // Version string prefix that identifies an OpenGL ES implementation.
 #define GPU_GL_VERSION 0x1F02
   constexpr char kGLESVersionPrefix[] = "OpenGL ES";
 
+#ifdef WIN32
+  using GLGetStringProc = const char*(__stdcall*)(uint32_t);
+#else
   using GLGetStringProc = const char* (*)(uint32_t);
+#endif
 
   GLGetStringProc gl_get_string =
       reinterpret_cast<GLGetStringProc>(proc_resolver("glGetString"));
@@ -58,11 +81,26 @@ static bool IsProcResolverOpenGLES(
 }
 
 static sk_sp<const GrGLInterface> CreateGLInterface(
-    GPUSurfaceGLDelegate::GLProcResolver proc_resolver) {
+    const GPUSurfaceGLDelegate::GLProcResolver& proc_resolver) {
   if (proc_resolver == nullptr) {
-    // If there is no custom proc resolver, ask Skia to guess the native
+#if defined(FML_OS_ANDROID)
+    return GrGLInterfaces::MakeEGL();
+#elif defined(FML_OS_LINUX)
+#if defined(SK_GLX)
+    return GrGLInterfaces::MakeGLX();
+#else
+    return nullptr;
+#endif  // defined(SK_GLX)
+#elif defined(FML_OS_IOS)
+    return GrGLInterfaces::MakeIOS();
+#elif defined(FML_OS_MACOSX)
+    return GrGLInterfaces::MakeMac();
+#else
+    // TODO(kjlubick) update this when Skia has a Windows target for making GL
+    // interfaces. For now, ask Skia to guess the native
     // interface. This often leads to interesting results on most platforms.
     return GrGLMakeNativeInterface();
+#endif
   }
 
   struct ProcResolverContext {

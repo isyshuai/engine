@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_PUBLIC_FLUTTER_H_
-#define FLUTTER_SHELL_PLATFORM_WINDOWS_PUBLIC_FLUTTER_H_
+#ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_PUBLIC_FLUTTER_WINDOWS_H_
+#define FLUTTER_SHELL_PLATFORM_WINDOWS_PUBLIC_FLUTTER_WINDOWS_H_
 
+#include <dxgi.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <windows.h>
@@ -13,18 +14,15 @@
 #include "flutter_messenger.h"
 #include "flutter_plugin_registrar.h"
 
-#ifdef WINUWP
-#include <windows.applicationmodel.activation.h>
-#include <windows.ui.core.h>
-#endif
-
 #if defined(__cplusplus)
 extern "C" {
 #endif
 
-// Opaque reference to a Flutter window controller.
-typedef struct FlutterDesktopViewControllerState*
-    FlutterDesktopViewControllerRef;
+typedef void (*VoidCallback)(void* /* user data */);
+
+// Opaque reference to a Flutter view controller.
+struct FlutterDesktopViewController;
+typedef struct FlutterDesktopViewController* FlutterDesktopViewControllerRef;
 
 // Opaque reference to a Flutter window.
 struct FlutterDesktopView;
@@ -33,6 +31,9 @@ typedef struct FlutterDesktopView* FlutterDesktopViewRef;
 // Opaque reference to a Flutter engine instance.
 struct FlutterDesktopEngine;
 typedef struct FlutterDesktopEngine* FlutterDesktopEngineRef;
+
+// The unique identifier for a view.
+typedef int64_t FlutterDesktopViewId;
 
 // Properties for configuring a Flutter engine instance.
 typedef struct {
@@ -51,6 +52,14 @@ typedef struct {
   // containing the executable. This can be nullptr for a non-AOT build, as
   // it will be ignored in that case.
   const wchar_t* aot_library_path;
+
+  // The name of the top-level Dart entrypoint function. If null or the empty
+  // string, 'main' is assumed. If a custom entrypoint is used, this parameter
+  // must specifiy the name of a top-level function in the same Dart library as
+  // the app's main() function. Custom entrypoint functions must be decorated
+  // with `@pragma('vm:entry-point')` to ensure the method is not tree-shaken
+  // by the Dart compiler.
+  const char* dart_entrypoint;
 
   // Number of elements in the array passed in as dart_entrypoint_argv.
   int dart_entrypoint_argc;
@@ -76,22 +85,13 @@ typedef struct {
 // The caller owns the returned reference, and is responsible for calling
 // FlutterDesktopViewControllerDestroy. Returns a null pointer in the event of
 // an error.
-#ifdef WINUWP
-// The CoreApplicationView implementation accepts a pointer to the host
-// CoreApplicationView and view hookup is performed in the construction path.
-FLUTTER_EXPORT FlutterDesktopViewControllerRef
-FlutterDesktopViewControllerCreateFromCoreApplicationView(
-    ABI::Windows::ApplicationModel::Core::CoreApplicationView* window,
-    ABI::Windows::ApplicationModel::Activation::IActivatedEventArgs* args,
-    FlutterDesktopEngineRef engine);
-#else  //! WINUWP
-// The Win32 implementation accepts width, height
-// with view hookup explicitly performed using the caller using HWND parenting.
+//
+// The Win32 implementation accepts width, height with view hookup explicitly
+// performed using the caller using HWND parenting.
 FLUTTER_EXPORT FlutterDesktopViewControllerRef
 FlutterDesktopViewControllerCreate(int width,
                                    int height,
                                    FlutterDesktopEngineRef engine);
-#endif
 
 // Shuts down the engine instance associated with |controller|, and cleans up
 // associated state.
@@ -100,21 +100,24 @@ FlutterDesktopViewControllerCreate(int width,
 FLUTTER_EXPORT void FlutterDesktopViewControllerDestroy(
     FlutterDesktopViewControllerRef controller);
 
+// Returns the view controller's view ID.
+FLUTTER_EXPORT FlutterDesktopViewId FlutterDesktopViewControllerGetViewId(
+    FlutterDesktopViewControllerRef view_controller);
+
 // Returns the handle for the engine running in FlutterDesktopViewControllerRef.
 //
 // Its lifetime is the same as the |controller|'s.
 FLUTTER_EXPORT FlutterDesktopEngineRef FlutterDesktopViewControllerGetEngine(
     FlutterDesktopViewControllerRef controller);
+
 // Returns the view managed by the given controller.
+FLUTTER_EXPORT FlutterDesktopViewRef FlutterDesktopViewControllerGetView(
+    FlutterDesktopViewControllerRef controller);
 
-FLUTTER_EXPORT FlutterDesktopViewRef
-FlutterDesktopViewControllerGetView(FlutterDesktopViewControllerRef controller);
-
-// Requests new frame from engine and repaints the view
+// Requests new frame from the engine and repaints the view.
 FLUTTER_EXPORT void FlutterDesktopViewControllerForceRedraw(
     FlutterDesktopViewControllerRef controller);
 
-#ifndef WINUWP
 // Allows the Flutter engine and any interested plugins an opportunity to
 // handle the given message.
 //
@@ -127,7 +130,6 @@ FLUTTER_EXPORT bool FlutterDesktopViewControllerHandleTopLevelWindowProc(
     WPARAM wparam,
     LPARAM lparam,
     LRESULT* result);
-#endif
 
 // ========== Engine ==========
 
@@ -145,19 +147,24 @@ FLUTTER_EXPORT FlutterDesktopEngineRef FlutterDesktopEngineCreate(
 // |engine| is no longer valid after this call.
 FLUTTER_EXPORT bool FlutterDesktopEngineDestroy(FlutterDesktopEngineRef engine);
 
-// Starts running the given engine instance and optional entry point in the Dart
-// project. If the entry point is null, defaults to main().
+// Starts running the given engine instance.
 //
-// If provided, entry_point must be the name of a top-level function from the
+// The entry_point parameter is deprecated but preserved for
+// backward-compatibility. If desired, a custom Dart entrypoint function can be
+// set in the dart_entrypoint field of the FlutterDesktopEngineProperties
+// struct passed to FlutterDesktopEngineCreate.
+//
+// If specified, entry_point must be the name of a top-level function from the
 // same Dart library that contains the app's main() function, and must be
 // decorated with `@pragma(vm:entry-point)` to ensure the method is not
-// tree-shaken by the Dart compiler.
+// tree-shaken by the Dart compiler. If conflicting non-null values are passed
+// to this function and via the FlutterDesktopEngineProperties struct, the run
+// will fail.
 //
 // Returns false if running the engine failed.
 FLUTTER_EXPORT bool FlutterDesktopEngineRun(FlutterDesktopEngineRef engine,
                                             const char* entry_point);
 
-#ifndef WINUWP
 // DEPRECATED: This is no longer necessary to call, Flutter will take care of
 // processing engine messages transparently through DispatchMessage.
 //
@@ -167,14 +174,10 @@ FLUTTER_EXPORT bool FlutterDesktopEngineRun(FlutterDesktopEngineRef engine,
 // This should be called on every run of the application-level runloop, and
 // a wait for native events in the runloop should never be longer than the
 // last return value from this function.
-FLUTTER_EXPORT uint64_t
-FlutterDesktopEngineProcessMessages(FlutterDesktopEngineRef engine);
-#endif
-
-FLUTTER_EXPORT void FlutterDesktopEngineReloadSystemFonts(
+FLUTTER_EXPORT uint64_t FlutterDesktopEngineProcessMessages(
     FlutterDesktopEngineRef engine);
 
-FLUTTER_EXPORT void FlutterDesktopEngineReloadPlatformBrightness(
+FLUTTER_EXPORT void FlutterDesktopEngineReloadSystemFonts(
     FlutterDesktopEngineRef engine);
 
 // Returns the plugin registrar handle for the plugin with the given name.
@@ -185,25 +188,48 @@ FlutterDesktopEngineGetPluginRegistrar(FlutterDesktopEngineRef engine,
                                        const char* plugin_name);
 
 // Returns the messenger associated with the engine.
-FLUTTER_EXPORT FlutterDesktopMessengerRef
-FlutterDesktopEngineGetMessenger(FlutterDesktopEngineRef engine);
+//
+// This does not provide an owning reference, so should *not* be balanced with a
+// call to |FlutterDesktopMessengerRelease|.
+//
+// Callers should use |FlutterDesktopMessengerAddRef| if the returned pointer
+// will potentially outlive 'engine', such as when passing it to another thread.
+FLUTTER_EXPORT FlutterDesktopMessengerRef FlutterDesktopEngineGetMessenger(
+    FlutterDesktopEngineRef engine);
 
 // Returns the texture registrar associated with the engine.
 FLUTTER_EXPORT FlutterDesktopTextureRegistrarRef
-FlutterDesktopEngineGetTextureRegistrar(
-    FlutterDesktopTextureRegistrarRef texture_registrar);
+FlutterDesktopEngineGetTextureRegistrar(FlutterDesktopEngineRef engine);
+
+// Schedule a callback to be called after the next frame is drawn.
+//
+// This must be called from the platform thread. The callback is executed only
+// once on the platform thread.
+FLUTTER_EXPORT void FlutterDesktopEngineSetNextFrameCallback(
+    FlutterDesktopEngineRef engine,
+    VoidCallback callback,
+    void* user_data);
 
 // ========== View ==========
 
-#ifdef WINUWP
-// Return backing CoreApplicationView for manipulation of CoreWindow and
-// CoreTitleBar in host application.
-FLUTTER_EXPORT ABI::Windows::ApplicationModel::Core::CoreApplicationView*
-FlutterDesktopViewGetCoreApplicationView(FlutterDesktopViewRef view);
-#else
-// Return backing HWND for manipulation in host application.
+// Returns the backing HWND for manipulation in host application.
 FLUTTER_EXPORT HWND FlutterDesktopViewGetHWND(FlutterDesktopViewRef view);
-#endif
+
+// Returns the DXGI adapter used for rendering or nullptr in case of error.
+FLUTTER_EXPORT IDXGIAdapter* FlutterDesktopViewGetGraphicsAdapter(
+    FlutterDesktopViewRef view);
+
+// Called to pass an external window message to the engine for lifecycle
+// state updates. Non-Flutter windows must call this method in their WndProc
+// in order to be included in the logic for application lifecycle state
+// updates. Returns a result if the message should be consumed.
+FLUTTER_EXPORT bool FlutterDesktopEngineProcessExternalWindowMessage(
+    FlutterDesktopEngineRef engine,
+    HWND hwnd,
+    UINT message,
+    WPARAM wparam,
+    LPARAM lparam,
+    LRESULT* result);
 
 // ========== Plugin Registrar (extensions) ==========
 // These are Windows-specific extensions to flutter_plugin_registrar.h
@@ -223,11 +249,22 @@ typedef bool (*FlutterDesktopWindowProcCallback)(HWND /* hwnd */,
                                                  void* /* user data */,
                                                  LRESULT* result);
 
-// Returns the view associated with this registrar's engine instance.
+// Returns the implicit view associated with this registrar's engine instance,
+// or null if there is no implicit view.
+//
+// See:
+// https://api.flutter.dev/flutter/dart-ui/PlatformDispatcher/implicitView.html
+//
+// DEPRECATED: Use |FlutterDesktopPluginRegistrarGetViewById| instead.
 FLUTTER_EXPORT FlutterDesktopViewRef FlutterDesktopPluginRegistrarGetView(
     FlutterDesktopPluginRegistrarRef registrar);
 
-#ifndef WINUWP
+// Returns the view associated with the registrar's engine instance, or null if
+// the view does not exist.
+FLUTTER_EXPORT FlutterDesktopViewRef FlutterDesktopPluginRegistrarGetViewById(
+    FlutterDesktopPluginRegistrarRef registrar,
+    FlutterDesktopViewId view_id);
+
 FLUTTER_EXPORT void
 FlutterDesktopPluginRegistrarRegisterTopLevelWindowProcDelegate(
     FlutterDesktopPluginRegistrarRef registrar,
@@ -238,7 +275,6 @@ FLUTTER_EXPORT void
 FlutterDesktopPluginRegistrarUnregisterTopLevelWindowProcDelegate(
     FlutterDesktopPluginRegistrarRef registrar,
     FlutterDesktopWindowProcCallback delegate);
-#endif
 
 // ========== Freestanding Utilities ==========
 

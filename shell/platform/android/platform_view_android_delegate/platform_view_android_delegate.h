@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_DELEGATE_H_
-#define SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_DELEGATE_H_
+#ifndef FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_DELEGATE_PLATFORM_VIEW_ANDROID_DELEGATE_H_
+#define FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_DELEGATE_PLATFORM_VIEW_ANDROID_DELEGATE_H_
 
 #include <memory>
 #include <string>
@@ -18,12 +18,13 @@ class PlatformViewAndroidDelegate {
  public:
   explicit PlatformViewAndroidDelegate(
       std::shared_ptr<PlatformViewAndroidJNI> jni_facade);
-  void UpdateSemantics(flutter::SemanticsNodeUpdates update,
-                       flutter::CustomAccessibilityActionUpdates actions);
+  void UpdateSemantics(
+      const flutter::SemanticsNodeUpdates& update,
+      const flutter::CustomAccessibilityActionUpdates& actions);
 
  private:
   const std::shared_ptr<PlatformViewAndroidJNI> jni_facade_;
 };
 }  // namespace flutter
 
-#endif  // SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_H_
+#endif  // FLUTTER_SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_DELEGATE_PLATFORM_VIEW_ANDROID_DELEGATE_H_

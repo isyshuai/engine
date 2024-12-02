@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
-import '../browser_detection.dart';
+import '../dom.dart';
 
 /// Controls the capitalization of the text.
 ///
@@ -33,8 +33,6 @@ enum TextCapitalization {
 /// See: https://developers.google.com/web/updates/2015/04/autocapitalize
 /// https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/autocapitalize
 class TextCapitalizationConfig {
-  final TextCapitalization textCapitalization;
-
   const TextCapitalizationConfig.defaultCapitalization()
       : textCapitalization = TextCapitalization.none;
 
@@ -48,6 +46,8 @@ class TextCapitalizationConfig {
                         ? TextCapitalization.sentences
                         : TextCapitalization.none;
 
+  final TextCapitalization textCapitalization;
+
   /// Sets `autocapitalize` attribute on input elements.
   ///
   /// This attribute is only available for mobile browsers.
@@ -58,35 +58,31 @@ class TextCapitalizationConfig {
   ///
   /// See: https://developers.google.com/web/updates/2015/04/autocapitalize
   /// https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/autocapitalize
-  void setAutocapitalizeAttribute(html.HtmlElement domElement) {
+  void setAutocapitalizeAttribute(DomHTMLElement domElement) {
     String autocapitalize = '';
     switch (textCapitalization) {
       case TextCapitalization.words:
         // TODO(mdebbar): There is a bug for `words` level capitalization in IOS now.
         // For now go back to default. Remove the check after bug is resolved.
         // https://bugs.webkit.org/show_bug.cgi?id=148504
-        if (browserEngine == BrowserEngine.webkit) {
+        if (ui_web.browser.browserEngine == ui_web.BrowserEngine.webkit) {
           autocapitalize = 'sentences';
         } else {
           autocapitalize = 'words';
         }
-        break;
       case TextCapitalization.characters:
         autocapitalize = 'characters';
-        break;
       case TextCapitalization.sentences:
         autocapitalize = 'sentences';
-        break;
       case TextCapitalization.none:
-      default:
         autocapitalize = 'off';
-        break;
     }
-    if (domElement is html.InputElement) {
-      final html.InputElement element = domElement;
+    if (domInstanceOfString(domElement, 'HTMLInputElement')) {
+      final DomHTMLInputElement element = domElement as DomHTMLInputElement;
       element.setAttribute('autocapitalize', autocapitalize);
-    } else if (domElement is html.TextAreaElement) {
-      final html.TextAreaElement element = domElement;
+    } else if (domInstanceOfString(domElement, 'HTMLTextAreaElement')) {
+      final DomHTMLTextAreaElement element = domElement as
+          DomHTMLTextAreaElement;
       element.setAttribute('autocapitalize', autocapitalize);
     }
   }

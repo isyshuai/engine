@@ -271,6 +271,7 @@ void AXPlatformNodeWinTest::TearDown() {
   ax_fragment_root_.reset(nullptr);
   DestroyTree();
   TestAXNodeWrapper::SetGlobalIsWebContent(false);
+  TestAXNodeWrapper::ClearHitTestResults();
   ASSERT_EQ(0U, AXPlatformNodeBase::GetInstanceCountForTesting());
 }
 
@@ -3508,11 +3509,13 @@ TEST_F(AXPlatformNodeWinTest, GetPatternProviderSupportedPatterns) {
 
   Init(update);
 
-  EXPECT_EQ(PatternSet({UIA_ScrollItemPatternId}),
+  EXPECT_EQ(PatternSet({UIA_ScrollItemPatternId, UIA_TextPatternId,
+                        UIA_TextEditPatternId}),
             GetSupportedPatternsFromNodeId(root_id));
 
   EXPECT_EQ(PatternSet({UIA_ScrollItemPatternId, UIA_ValuePatternId,
-                        UIA_ExpandCollapsePatternId}),
+                        UIA_ExpandCollapsePatternId, UIA_TextPatternId,
+                        UIA_TextEditPatternId}),
             GetSupportedPatternsFromNodeId(text_field_with_combo_box_id));
 
   EXPECT_EQ(PatternSet({UIA_ScrollItemPatternId, UIA_ValuePatternId,
@@ -4473,8 +4476,7 @@ TEST_F(AXPlatformNodeWinTest, IValueProvider_GetValue) {
   EXPECT_HRESULT_SUCCEEDED(
       QueryInterfaceFromNode<IValueProvider>(GetRootAsAXNode()->children()[0])
           ->get_Value(bstr_value.Receive()));
-  // TODO(gw280): https://github.com/flutter/flutter/issues/78460
-  EXPECT_STREQ(L"3.000000", bstr_value.Get());
+  EXPECT_STREQ(L"3", bstr_value.Get());
   bstr_value.Reset();
 
   EXPECT_HRESULT_SUCCEEDED(
@@ -4533,7 +4535,7 @@ TEST_F(AXPlatformNodeWinTest, IValueProvider_SetValue) {
 
   EXPECT_UIA_ELEMENTNOTENABLED(provider1->SetValue(L"2"));
   EXPECT_HRESULT_SUCCEEDED(provider1->get_Value(bstr_value.Receive()));
-  EXPECT_STREQ(L"3.000000", bstr_value.Get());
+  EXPECT_STREQ(L"3", bstr_value.Get());
   bstr_value.Reset();
 
   EXPECT_HRESULT_SUCCEEDED(provider2->SetValue(L"changed"));
@@ -4670,6 +4672,22 @@ TEST_F(AXPlatformNodeWinTest, IScrollProviderSetScrollPercent) {
   EXPECT_HRESULT_SUCCEEDED(
       scroll_provider->get_VerticalScrollPercent(&y_scroll_percent));
   EXPECT_EQ(y_scroll_percent, 34);
+}
+
+TEST_F(AXPlatformNodeWinTest, MojoEventToUIAPropertyTest) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kCheckBox;
+  root.AddIntAttribute(ax::mojom::IntAttribute::kCheckedState,
+                       static_cast<int>(ax::mojom::CheckedState::kMixed));
+
+  Init(root);
+
+  ComPtr<AXPlatformNodeWin> platform_node =
+      QueryInterfaceFromNode<AXPlatformNodeWin>(GetRootAsAXNode());
+  EXPECT_EQ(
+      platform_node->MojoEventToUIAProperty(ax::mojom::Event::kValueChanged),
+      UIA_ToggleToggleStatePropertyId);
 }
 
 }  // namespace ui

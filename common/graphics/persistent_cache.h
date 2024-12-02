@@ -5,6 +5,8 @@
 #ifndef FLUTTER_COMMON_GRAPHICS_PERSISTENT_CACHE_H_
 #define FLUTTER_COMMON_GRAPHICS_PERSISTENT_CACHE_H_
 
+#if !SLIMPELLER
+
 #include <memory>
 #include <mutex>
 #include <set>
@@ -13,7 +15,9 @@
 #include "flutter/fml/macros.h"
 #include "flutter/fml/task_runner.h"
 #include "flutter/fml/unique_fd.h"
-#include "third_party/skia/include/gpu/GrContextOptions.h"
+#include "third_party/skia/include/gpu/ganesh/GrContextOptions.h"
+
+class GrDirectContext;
 
 namespace flutter {
 
@@ -68,9 +72,9 @@ class PersistentCache : public GrContextOptions::PersistentCache {
 
   ~PersistentCache() override;
 
-  void AddWorkerTaskRunner(fml::RefPtr<fml::TaskRunner> task_runner);
+  void AddWorkerTaskRunner(const fml::RefPtr<fml::TaskRunner>& task_runner);
 
-  void RemoveWorkerTaskRunner(fml::RefPtr<fml::TaskRunner> task_runner);
+  void RemoveWorkerTaskRunner(const fml::RefPtr<fml::TaskRunner>& task_runner);
 
   // Whether Skia tries to store any shader into this persistent cache after
   // |ResetStoredNewShaders| is called. This flag is usually reset before each
@@ -176,5 +180,7 @@ class PersistentCache : public GrContextOptions::PersistentCache {
 };
 
 }  // namespace flutter
+
+#endif  //  !SLIMPELLER
 
 #endif  // FLUTTER_COMMON_GRAPHICS_PERSISTENT_CACHE_H_

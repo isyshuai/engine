@@ -16,6 +16,7 @@
 #include <string>
 #include <utility>
 
+#include "flutter/fml/cpu_affinity.h"
 #include "flutter/fml/logging.h"
 #include "flutter/fml/make_copyable.h"
 #include "flutter/fml/message_loop.h"
@@ -32,6 +33,49 @@
 
 namespace flutter {
 
+/// Inheriting ThreadConfigurer and use Android platform thread API to configure
+/// the thread priorities
+static void AndroidPlatformThreadConfigSetter(
+    const fml::Thread::ThreadConfig& config) {
+  // set thread name
+  fml::Thread::SetCurrentThreadName(config);
+  // set thread priority
+  switch (config.priority) {
+    case fml::Thread::ThreadPriority::kBackground: {
+      fml::RequestAffinity(fml::CpuAffinity::kEfficiency);
+      if (::setpriority(PRIO_PROCESS, 0, 10) != 0) {
+        FML_LOG(ERROR) << "Failed to set IO task runner priority";
+      }
+      break;
+    }
+    case fml::Thread::ThreadPriority::kDisplay: {
+      fml::RequestAffinity(fml::CpuAffinity::kNotEfficiency);
+      if (::setpriority(PRIO_PROCESS, 0, -1) != 0) {
+        FML_LOG(ERROR) << "Failed to set UI task runner priority";
+      }
+      break;
+    }
+    case fml::Thread::ThreadPriority::kRaster: {
+      fml::RequestAffinity(fml::CpuAffinity::kNotEfficiency);
+      // Android describes -8 as "most important display threads, for
+      // compositing the screen and retrieving input events". Conservatively
+      // set the raster thread to slightly lower priority than it.
+      if (::setpriority(PRIO_PROCESS, 0, -5) != 0) {
+        // Defensive fallback. Depending on the OEM, it may not be possible
+        // to set priority to -5.
+        if (::setpriority(PRIO_PROCESS, 0, -2) != 0) {
+          FML_LOG(ERROR) << "Failed to set raster task runner priority";
+        }
+      }
+      break;
+    }
+    default:
+      fml::RequestAffinity(fml::CpuAffinity::kNotPerformance);
+      if (::setpriority(PRIO_PROCESS, 0, 0) != 0) {
+        FML_LOG(ERROR) << "Failed to set priority";
+      }
+  }
+}
 static PlatformData GetDefaultPlatformData() {
   PlatformData platform_data;
   platform_data.lifecycle_state = "AppLifecycleState.detached";
@@ -39,16 +83,33 @@ static PlatformData GetDefaultPlatformData() {
 }
 
 AndroidShellHolder::AndroidShellHolder(
-    flutter::Settings settings,
+    const flutter::Settings& settings,
     std::shared_ptr<PlatformViewAndroidJNI> jni_facade)
-    : settings_(std::move(settings)), jni_facade_(jni_facade) {
+    : settings_(settings), jni_facade_(jni_facade) {
   static size_t thread_host_count = 1;
   auto thread_label = std::to_string(thread_host_count++);
 
-  thread_host_ = std::make_shared<ThreadHost>();
-  *thread_host_ = {thread_label, ThreadHost::Type::UI |
-                                     ThreadHost::Type::RASTER |
-                                     ThreadHost::Type::IO};
+  auto mask = ThreadHost::Type::kRaster | ThreadHost::Type::kIo;
+  if (!settings.merged_platform_ui_thread) {
+    mask |= ThreadHost::Type::kUi;
+  }
+
+  flutter::ThreadHost::ThreadHostConfig host_config(
+      thread_label, mask, AndroidPlatformThreadConfigSetter);
+  host_config.ui_config = fml::Thread::ThreadConfig(
+      flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
+          flutter::ThreadHost::Type::kUi, thread_label),
+      fml::Thread::ThreadPriority::kDisplay);
+  host_config.raster_config = fml::Thread::ThreadConfig(
+      flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
+          flutter::ThreadHost::Type::kRaster, thread_label),
+      fml::Thread::ThreadPriority::kRaster);
+  host_config.io_config = fml::Thread::ThreadConfig(
+      flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
+          flutter::ThreadHost::Type::kIo, thread_label),
+      fml::Thread::ThreadPriority::kNormal);
+
+  thread_host_ = std::make_shared<ThreadHost>(host_config);
 
   fml::WeakPtr<PlatformViewAndroid> weak_platform_view;
   Shell::CreateCallback<PlatformView> on_create_platform_view =
@@ -62,10 +123,6 @@ AndroidShellHolder::AndroidShellHolder(
                 .enable_software_rendering  // use software rendering
         );
         weak_platform_view = platform_view_android->GetWeakPtr();
-        std::vector<std::unique_ptr<Display>> displays;
-        displays.push_back(std::make_unique<AndroidDisplay>(jni_facade));
-        shell.OnDisplayUpdates(DisplayUpdateType::kStartup,
-                               std::move(displays));
         return platform_view_android;
       };
 
@@ -82,7 +139,11 @@ AndroidShellHolder::AndroidShellHolder(
   fml::RefPtr<fml::TaskRunner> platform_runner =
       fml::MessageLoop::GetCurrent().GetTaskRunner();
   raster_runner = thread_host_->raster_thread->GetTaskRunner();
-  ui_runner = thread_host_->ui_thread->GetTaskRunner();
+  if (settings.merged_platform_ui_thread) {
+    ui_runner = platform_runner;
+  } else {
+    ui_runner = thread_host_->ui_thread->GetTaskRunner();
+  }
   io_runner = thread_host_->io_thread->GetTaskRunner();
 
   flutter::TaskRunners task_runners(thread_label,     // label
@@ -91,28 +152,6 @@ AndroidShellHolder::AndroidShellHolder(
                                     ui_runner,        // ui
                                     io_runner         // io
   );
-  task_runners.GetRasterTaskRunner()->PostTask([]() {
-    // Android describes -8 as "most important display threads, for
-    // compositing the screen and retrieving input events". Conservatively
-    // set the raster thread to slightly lower priority than it.
-    if (::setpriority(PRIO_PROCESS, gettid(), -5) != 0) {
-      // Defensive fallback. Depending on the OEM, it may not be possible
-      // to set priority to -5.
-      if (::setpriority(PRIO_PROCESS, gettid(), -2) != 0) {
-        FML_LOG(ERROR) << "Failed to set raster task runner priority";
-      }
-    }
-  });
-  task_runners.GetUITaskRunner()->PostTask([]() {
-    if (::setpriority(PRIO_PROCESS, gettid(), -1) != 0) {
-      FML_LOG(ERROR) << "Failed to set UI task runner priority";
-    }
-  });
-  task_runners.GetIOTaskRunner()->PostTask([]() {
-    if (::setpriority(PRIO_PROCESS, gettid(), 1) != 0) {
-      FML_LOG(ERROR) << "Failed to set IO task runner priority";
-    }
-  });
 
   shell_ =
       Shell::Create(GetDefaultPlatformData(),  // window data
@@ -131,7 +170,7 @@ AndroidShellHolder::AndroidShellHolder(
 
     shell_->RegisterImageDecoder(
         [runner = task_runners.GetIOTaskRunner()](sk_sp<SkData> buffer) {
-          return AndroidImageGenerator::MakeFromData(buffer, runner);
+          return AndroidImageGenerator::MakeFromData(std::move(buffer), runner);
         },
         -1);
     FML_DLOG(INFO) << "Registered Android SDK image decoder (API level 28+)";
@@ -147,12 +186,14 @@ AndroidShellHolder::AndroidShellHolder(
     const std::shared_ptr<PlatformViewAndroidJNI>& jni_facade,
     const std::shared_ptr<ThreadHost>& thread_host,
     std::unique_ptr<Shell> shell,
+    std::unique_ptr<APKAssetProvider> apk_asset_provider,
     const fml::WeakPtr<PlatformViewAndroid>& platform_view)
-    : settings_(std::move(settings)),
+    : settings_(settings),
       jni_facade_(jni_facade),
       platform_view_(platform_view),
       thread_host_(thread_host),
-      shell_(std::move(shell)) {
+      shell_(std::move(shell)),
+      apk_asset_provider_(std::move(apk_asset_provider)) {
   FML_DCHECK(jni_facade);
   FML_DCHECK(shell_);
   FML_DCHECK(shell_->IsSetup());
@@ -213,10 +254,6 @@ std::unique_ptr<AndroidShellHolder> AndroidShellHolder::Spawn(
             android_context          // Android context
         );
         weak_platform_view = platform_view_android->GetWeakPtr();
-        std::vector<std::unique_ptr<Display>> displays;
-        displays.push_back(std::make_unique<AndroidDisplay>(jni_facade));
-        shell.OnDisplayUpdates(DisplayUpdateType::kStartup,
-                               std::move(displays));
         return platform_view_android;
       };
 
@@ -226,8 +263,7 @@ std::unique_ptr<AndroidShellHolder> AndroidShellHolder::Spawn(
 
   // TODO(xster): could be worth tracing this to investigate whether
   // the IsolateConfiguration could be cached somewhere.
-  auto config = BuildRunConfiguration(asset_manager_, entrypoint, libraryUrl,
-                                      entrypoint_args);
+  auto config = BuildRunConfiguration(entrypoint, libraryUrl, entrypoint_args);
   if (!config) {
     // If the RunConfiguration was null, the kernel blob wasn't readable.
     // Fail the whole thing.
@@ -238,13 +274,13 @@ std::unique_ptr<AndroidShellHolder> AndroidShellHolder::Spawn(
       shell_->Spawn(std::move(config.value()), initial_route,
                     on_create_platform_view, on_create_rasterizer);
 
-  return std::unique_ptr<AndroidShellHolder>(
-      new AndroidShellHolder(GetSettings(), jni_facade, thread_host_,
-                             std::move(shell), weak_platform_view));
+  return std::unique_ptr<AndroidShellHolder>(new AndroidShellHolder(
+      GetSettings(), jni_facade, thread_host_, std::move(shell),
+      apk_asset_provider_->Clone(), weak_platform_view));
 }
 
 void AndroidShellHolder::Launch(
-    std::shared_ptr<AssetManager> asset_manager,
+    std::unique_ptr<APKAssetProvider> apk_asset_provider,
     const std::string& entrypoint,
     const std::string& libraryUrl,
     const std::vector<std::string>& entrypoint_args) {
@@ -252,12 +288,12 @@ void AndroidShellHolder::Launch(
     return;
   }
 
-  asset_manager_ = asset_manager;
-  auto config = BuildRunConfiguration(asset_manager, entrypoint, libraryUrl,
-                                      entrypoint_args);
+  apk_asset_provider_ = std::move(apk_asset_provider);
+  auto config = BuildRunConfiguration(entrypoint, libraryUrl, entrypoint_args);
   if (!config) {
     return;
   }
+  UpdateDisplayMetrics();
   shell_->RunEngine(std::move(config.value()));
 }
 
@@ -265,7 +301,8 @@ Rasterizer::Screenshot AndroidShellHolder::Screenshot(
     Rasterizer::ScreenshotType type,
     bool base64_encode) {
   if (!IsValid()) {
-    return {nullptr, SkISize::MakeEmpty()};
+    return {nullptr, SkISize::MakeEmpty(), "",
+            Rasterizer::ScreenshotFormat::kUnknown};
   }
   return shell_->Screenshot(type, base64_encode);
 }
@@ -281,7 +318,6 @@ void AndroidShellHolder::NotifyLowMemoryWarning() {
 }
 
 std::optional<RunConfiguration> AndroidShellHolder::BuildRunConfiguration(
-    std::shared_ptr<flutter::AssetManager> asset_manager,
     const std::string& entrypoint,
     const std::string& libraryUrl,
     const std::vector<std::string>& entrypoint_args) const {
@@ -300,21 +336,26 @@ std::optional<RunConfiguration> AndroidShellHolder::BuildRunConfiguration(
         IsolateConfiguration::CreateForKernel(std::move(kernel_blob));
   }
 
-  RunConfiguration config(std::move(isolate_configuration),
-                          std::move(asset_manager));
+  RunConfiguration config(std::move(isolate_configuration));
+  config.AddAssetResolver(apk_asset_provider_->Clone());
 
   {
-    if ((entrypoint.size() > 0) && (libraryUrl.size() > 0)) {
-      config.SetEntrypointAndLibrary(std::move(entrypoint),
-                                     std::move(libraryUrl));
-    } else if (entrypoint.size() > 0) {
-      config.SetEntrypoint(std::move(entrypoint));
+    if (!entrypoint.empty() && !libraryUrl.empty()) {
+      config.SetEntrypointAndLibrary(entrypoint, libraryUrl);
+    } else if (!entrypoint.empty()) {
+      config.SetEntrypoint(entrypoint);
     }
-    if (entrypoint_args.size() > 0) {
-      config.SetEntrypointArgs(std::move(entrypoint_args));
+    if (!entrypoint_args.empty()) {
+      config.SetEntrypointArgs(entrypoint_args);
     }
   }
   return config;
+}
+
+void AndroidShellHolder::UpdateDisplayMetrics() {
+  std::vector<std::unique_ptr<Display>> displays;
+  displays.push_back(std::make_unique<AndroidDisplay>(jni_facade_));
+  shell_->OnDisplayUpdates(std::move(displays));
 }
 
 }  // namespace flutter

@@ -6,8 +6,9 @@
 
 #include <array>
 
-#include <fcntl.h>
+#include <fuchsia/io/cpp/fidl.h>
 #include <lib/fdio/directory.h>
+#include <lib/fdio/fd.h>
 #include <lib/fdio/io.h>
 #include <lib/fdio/limits.h>
 #include <lib/fdio/namespace.h>
@@ -46,7 +47,7 @@ class ByteDataScope {
 
   explicit ByteDataScope(size_t size) {
     dart_handle_ = Dart_NewTypedData(Dart_TypedData_kByteData, size);
-    FML_DCHECK(!tonic::LogIfError(dart_handle_));
+    FML_DCHECK(!tonic::CheckAndHandleError(dart_handle_));
     Acquire();
     FML_DCHECK(size == size_);
   }
@@ -65,7 +66,7 @@ class ByteDataScope {
   void Release() {
     FML_DCHECK(is_valid_);
     Dart_Handle result = Dart_TypedDataReleaseData(dart_handle_);
-    tonic::LogIfError(result);
+    tonic::CheckAndHandleError(result);
     is_valid_ = false;
     data_ = nullptr;
     size_ = 0;
@@ -81,8 +82,8 @@ class ByteDataScope {
     intptr_t size;
     Dart_Handle result =
         Dart_TypedDataAcquireData(dart_handle_, &type, &data_, &size);
-    is_valid_ =
-        !tonic::LogIfError(result) && type == Dart_TypedData_kByteData && data_;
+    is_valid_ = !tonic::CheckAndHandleError(result) &&
+                type == Dart_TypedData_kByteData && data_;
     if (is_valid_) {
       size_ = size;
     } else {
@@ -119,7 +120,7 @@ Dart_Handle ConstructDartObject(const char* class_name, Args&&... args) {
       tonic::DartState::Current()->class_library();
   Dart_Handle type =
       Dart_HandleFromPersistent(class_library.GetClass("zircon", class_name));
-  FML_DCHECK(!tonic::LogIfError(type));
+  FML_DCHECK(!tonic::CheckAndHandleError(type));
 
   const char* cstr;
   Dart_StringToCString(Dart_ToString(type), &cstr);
@@ -128,7 +129,7 @@ Dart_Handle ConstructDartObject(const char* class_name, Args&&... args) {
       {std::forward<Args>(args)...}};
   Dart_Handle object =
       Dart_New(type, Dart_EmptyString(), sizeof...(Args), args_array.data());
-  FML_DCHECK(!tonic::LogIfError(object));
+  FML_DCHECK(!tonic::CheckAndHandleError(object));
   return object;
 }
 
@@ -158,31 +159,39 @@ Dart_Handle MakeHandleInfoList(
 fdio_ns_t* GetNamespace() {
   // Grab the fdio_ns_t* out of the isolate.
   Dart_Handle zircon_lib = Dart_LookupLibrary(ToDart("dart:zircon"));
-  FML_DCHECK(!tonic::LogIfError(zircon_lib));
+  FML_DCHECK(!tonic::CheckAndHandleError(zircon_lib));
   Dart_Handle namespace_type =
       Dart_GetNonNullableType(zircon_lib, ToDart("_Namespace"), 0, nullptr);
-  FML_DCHECK(!tonic::LogIfError(namespace_type));
+  FML_DCHECK(!tonic::CheckAndHandleError(namespace_type));
   Dart_Handle namespace_field =
       Dart_GetField(namespace_type, ToDart("_namespace"));
-  FML_DCHECK(!tonic::LogIfError(namespace_field));
+  FML_DCHECK(!tonic::CheckAndHandleError(namespace_field));
   uint64_t fdio_ns_ptr;
   Dart_Handle result = Dart_IntegerToUint64(namespace_field, &fdio_ns_ptr);
-  FML_DCHECK(!tonic::LogIfError(result));
+  FML_DCHECK(!tonic::CheckAndHandleError(result));
 
   return reinterpret_cast<fdio_ns_t*>(fdio_ns_ptr);
 }
 
-fml::UniqueFD FdFromPath(std::string path) {
-  // Get a VMO for the file.
-  fdio_ns_t* ns = reinterpret_cast<fdio_ns_t*>(GetNamespace());
-  fml::UniqueFD dirfd(fdio_ns_opendir(ns));
-  if (!dirfd.is_valid())
-    return fml::UniqueFD();
-
-  const char* c_path = path.c_str();
-  if (path.length() > 0 && c_path[0] == '/')
-    c_path = &c_path[1];
-  return fml::UniqueFD(openat(dirfd.get(), c_path, O_RDONLY));
+zx_status_t FdFromPath(const char* path, fml::UniqueFD& fd) {
+  fml::UniqueFD dir_fd(fdio_ns_opendir(GetNamespace()));
+  if (!dir_fd.is_valid()) {
+    // TODO: can we return errno?
+    return ZX_ERR_IO;
+  }
+  if (path != nullptr && *path == '/') {
+    path++;
+  }
+  int raw_fd;
+  if (zx_status_t status = fdio_open_fd_at(
+          dir_fd.get(), path,
+          static_cast<uint32_t>(fuchsia::io::OpenFlags::RIGHT_READABLE),
+          &raw_fd);
+      status != ZX_OK) {
+    return status;
+  }
+  fd.reset(raw_fd);
+  return ZX_OK;
 }
 
 }  // namespace
@@ -203,41 +212,34 @@ Dart_Handle System::ChannelCreate(uint32_t options) {
 
 zx_status_t System::ConnectToService(std::string path,
                                      fml::RefPtr<Handle> channel) {
-  return fdio_ns_connect(GetNamespace(), path.c_str(),
-                         ZX_FS_RIGHT_READABLE | ZX_FS_RIGHT_WRITABLE,
-                         channel->ReleaseHandle());
-}
-
-zx::channel System::CloneChannelFromFileDescriptor(int fd) {
-  zx::handle handle;
-  zx_status_t status = fdio_fd_clone(fd, handle.reset_and_get_address());
-  if (status != ZX_OK)
-    return zx::channel();
-
-  zx_info_handle_basic_t info = {};
-  status =
-      handle.get_info(ZX_INFO_HANDLE_BASIC, &info, sizeof(info), NULL, NULL);
-
-  if (status != ZX_OK || info.type != ZX_OBJ_TYPE_CHANNEL)
-    return zx::channel();
-
-  return zx::channel(handle.release());
+  return fdio_ns_service_connect(GetNamespace(), path.c_str(),
+                                 channel->ReleaseHandle());
 }
 
 Dart_Handle System::ChannelFromFile(std::string path) {
-  fml::UniqueFD fd = FdFromPath(path);
-  if (!fd.is_valid()) {
-    return ConstructDartObject(kHandleResult, ToDart(ZX_ERR_IO));
+  fml::UniqueFD fd;
+  if (zx_status_t status = FdFromPath(path.c_str(), fd); status != ZX_OK) {
+    return ConstructDartObject(kHandleResult, ToDart(status));
   }
 
-  // Get channel from fd.
-  zx::channel channel = CloneChannelFromFileDescriptor(fd.get());
-  if (!channel) {
-    return ConstructDartObject(kHandleResult, ToDart(ZX_ERR_IO));
+  zx::handle handle;
+  if (zx_status_t status =
+          fdio_fd_transfer(fd.release(), handle.reset_and_get_address());
+      status != ZX_OK) {
+    return ConstructDartObject(kHandleResult, ToDart(status));
+  }
+  zx_info_handle_basic_t info;
+  if (zx_status_t status = handle.get_info(ZX_INFO_HANDLE_BASIC, &info,
+                                           sizeof(info), nullptr, nullptr);
+      status != ZX_OK) {
+    return ConstructDartObject(kHandleResult, ToDart(status));
+  }
+  if (info.type != ZX_OBJ_TYPE_CHANNEL) {
+    return ConstructDartObject(kHandleResult, ToDart(ZX_ERR_WRONG_TYPE));
   }
 
   return ConstructDartObject(kHandleResult, ToDart(ZX_OK),
-                             ToDart(Handle::Create(channel.release())));
+                             ToDart(Handle::Create(handle.release())));
 }
 
 zx_status_t System::ChannelWrite(fml::RefPtr<Handle> channel,
@@ -452,20 +454,25 @@ Dart_Handle System::VmoCreate(uint64_t size, uint32_t options) {
 }
 
 Dart_Handle System::VmoFromFile(std::string path) {
-  fml::UniqueFD fd = FdFromPath(path);
-  if (!fd.is_valid())
-    return ConstructDartObject(kFromFileResult, ToDart(ZX_ERR_IO));
+  fml::UniqueFD fd;
+  if (zx_status_t status = FdFromPath(path.c_str(), fd); status != ZX_OK) {
+    return ConstructDartObject(kHandleResult, ToDart(status));
+  }
 
   struct stat stat_struct;
-  if (fstat(fd.get(), &stat_struct) == -1)
+  if (fstat(fd.get(), &stat_struct) != 0) {
+    // TODO: can we return errno?
     return ConstructDartObject(kFromFileResult, ToDart(ZX_ERR_IO));
-  zx_handle_t vmo = ZX_HANDLE_INVALID;
-  zx_status_t status = fdio_get_vmo_clone(fd.get(), &vmo);
-  if (status != ZX_OK)
+  }
+  zx::vmo vmo;
+  if (zx_status_t status =
+          fdio_get_vmo_clone(fd.get(), vmo.reset_and_get_address());
+      status != ZX_OK) {
     return ConstructDartObject(kFromFileResult, ToDart(status));
+  }
 
-  return ConstructDartObject(kFromFileResult, ToDart(status),
-                             ToDart(Handle::Create(vmo)),
+  return ConstructDartObject(kFromFileResult, ToDart(ZX_OK),
+                             ToDart(Handle::Create(vmo.release())),
                              ToDart(stat_struct.st_size));
 }
 
@@ -551,7 +558,7 @@ Dart_Handle System::VmoMap(fml::RefPtr<Handle> vmo) {
   void* data = reinterpret_cast<void*>(mapped_addr);
   Dart_Handle object = Dart_NewExternalTypedData(Dart_TypedData_kUint8, data,
                                                  static_cast<intptr_t>(size));
-  FML_DCHECK(!tonic::LogIfError(object));
+  FML_DCHECK(!tonic::CheckAndHandleError(object));
 
   SizedRegion* r = new SizedRegion(data, size);
   Dart_NewFinalizableHandle(object, reinterpret_cast<void*>(r),

@@ -11,10 +11,9 @@
 //                framework. Currently the framework does not report the
 //                grouping of radio buttons.
 
-import 'dart:html' as html;
-
 import 'package:ui/ui.dart' as ui;
 
+import 'label_and_value.dart';
 import 'semantics.dart';
 
 /// The specific type of checkable control.
@@ -49,34 +48,42 @@ _CheckableKind _checkableKindFromSemanticsFlag(
 ///
 /// See also [ui.SemanticsFlag.hasCheckedState], [ui.SemanticsFlag.isChecked],
 /// [ui.SemanticsFlag.isInMutuallyExclusiveGroup], [ui.SemanticsFlag.isToggled],
-/// [ui.SemanticsFlag.hasToggledState]
-class Checkable extends RoleManager {
-  final _CheckableKind _kind;
-
-  Checkable(SemanticsObject semanticsObject)
+/// [ui.SemanticsFlag.hasToggledState].
+///
+/// See also [Selectable] behavior, which expresses a similar but different
+/// boolean state of being "selected".
+class SemanticCheckable extends SemanticRole {
+  SemanticCheckable(SemanticsObject semanticsObject)
       : _kind = _checkableKindFromSemanticsFlag(semanticsObject),
-        super(Role.checkable, semanticsObject);
+        super.withBasics(
+          SemanticRoleKind.checkable,
+          semanticsObject,
+          preferredLabelRepresentation: LabelRepresentation.ariaLabel,
+        ) {
+    addTappable();
+  }
+
+  final _CheckableKind _kind;
 
   @override
   void update() {
+    super.update();
+
     if (semanticsObject.isFlagsDirty) {
       switch (_kind) {
         case _CheckableKind.checkbox:
-          semanticsObject.setAriaRole('checkbox', true);
-          break;
+          setAriaRole('checkbox');
         case _CheckableKind.radio:
-          semanticsObject.setAriaRole('radio', true);
-          break;
+          setAriaRole('radio');
         case _CheckableKind.toggle:
-          semanticsObject.setAriaRole('switch', true);
-          break;
+          setAriaRole('switch');
       }
 
       /// Adding disabled and aria-disabled attribute to notify the assistive
       /// technologies of disabled elements.
       _updateDisabledAttribute();
 
-      semanticsObject.element.setAttribute(
+      setAttribute(
         'aria-checked',
         (semanticsObject.hasFlag(ui.SemanticsFlag.isChecked) ||
                 semanticsObject.hasFlag(ui.SemanticsFlag.isToggled))
@@ -88,33 +95,49 @@ class Checkable extends RoleManager {
 
   @override
   void dispose() {
-    switch (_kind) {
-      case _CheckableKind.checkbox:
-        semanticsObject.setAriaRole('checkbox', false);
-        break;
-      case _CheckableKind.radio:
-        semanticsObject.setAriaRole('radio', false);
-        break;
-      case _CheckableKind.toggle:
-        semanticsObject.setAriaRole('switch', false);
-        break;
-    }
+    super.dispose();
     _removeDisabledAttribute();
   }
 
   void _updateDisabledAttribute() {
     if (semanticsObject.enabledState() == EnabledState.disabled) {
-      final html.Element element = semanticsObject.element;
-      element
-        ..setAttribute('aria-disabled', 'true')
-        ..setAttribute('disabled', 'true');
+      setAttribute('aria-disabled', 'true');
+      setAttribute('disabled', 'true');
     } else {
       _removeDisabledAttribute();
     }
   }
 
   void _removeDisabledAttribute() {
-    final html.Element element = semanticsObject.element;
-    element..removeAttribute('aria-disabled')..removeAttribute('disabled');
+    removeAttribute('aria-disabled');
+    removeAttribute('disabled');
+  }
+
+  @override
+  bool focusAsRouteDefault() => focusable?.focusAsRouteDefault() ?? false;
+}
+
+/// Adds selectability behavior to a semantic node.
+///
+/// A selectable node would have the `aria-selected` set to "true" if the node
+/// is currently selected (i.e. [SemanticsObject.isSelected] is true), and set
+/// to "false" if it's not selected (i.e. [SemanticsObject.isSelected] is
+/// false). If the node is not selectable (i.e. [SemanticsObject.isSelectable]
+/// is false), then `aria-selected` is unset.
+///
+/// See also [SemanticCheckable], which expresses a similar but different
+/// boolean state of being "checked" or "toggled".
+class Selectable extends SemanticBehavior {
+  Selectable(super.semanticsObject, super.owner);
+
+  @override
+  void update() {
+    if (semanticsObject.isFlagsDirty) {
+      if (semanticsObject.isSelectable) {
+        owner.setAttribute('aria-selected', semanticsObject.isSelected);
+      } else {
+        owner.removeAttribute('aria-selected');
+      }
+    }
   }
 }

@@ -7,39 +7,33 @@
 #include <Metal/Metal.h>
 
 #include "flutter/fml/logging.h"
-#include "flutter/fml/platform/darwin/scoped_nsobject.h"
 #include "flutter/testing/test_metal_context.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/gpu/GpuTypes.h"
+#include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "third_party/skia/include/gpu/ganesh/mtl/GrMtlBackendSurface.h"
+#include "third_party/skia/include/gpu/ganesh/mtl/GrMtlTypes.h"
 
-namespace flutter {
+static_assert(__has_feature(objc_arc), "ARC must be enabled.");
+
+namespace flutter::testing {
 
 void TestMetalSurfaceImpl::Init(const TestMetalContext::TextureInfo& texture_info,
                                 const SkISize& surface_size) {
-  auto texture_descriptor = fml::scoped_nsobject{
-      [[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                          width:surface_size.width()
-                                                         height:surface_size.height()
-                                                      mipmapped:NO] retain]};
-
-  // The most pessimistic option and disables all optimizations but allows tests
-  // the most flexible access to the surface. They may read and write to the
-  // surface from shaders or use as a pixel view.
-  texture_descriptor.get().usage = MTLTextureUsageUnknown;
-
-  if (!texture_descriptor) {
-    FML_LOG(ERROR) << "Invalid texture descriptor.";
-    return;
-  }
-
   id<MTLTexture> texture = (__bridge id<MTLTexture>)texture_info.texture;
 
   GrMtlTextureInfo skia_texture_info;
-  skia_texture_info.fTexture.reset([texture retain]);
-  GrBackendTexture backend_texture(surface_size.width(), surface_size.height(), GrMipmapped::kNo,
-                                   skia_texture_info);
+  skia_texture_info.fTexture.retain((__bridge GrMTLHandle)texture);
+  GrBackendTexture backend_texture = GrBackendTextures::MakeMtl(
+      surface_size.width(), surface_size.height(), skgpu::Mipmapped::kNo, skia_texture_info);
 
-  sk_sp<SkSurface> surface = SkSurface::MakeFromBackendTexture(
+  sk_sp<SkSurface> surface = SkSurfaces::WrapBackendTexture(
       test_metal_context_.GetSkiaContext().get(), backend_texture, kTopLeft_GrSurfaceOrigin, 1,
       kBGRA_8888_SkColorType, nullptr, nullptr);
 
@@ -49,7 +43,7 @@ void TestMetalSurfaceImpl::Init(const TestMetalContext::TextureInfo& texture_inf
   }
 
   surface_ = std::move(surface);
-  texture_info_ = std::move(texture_info);
+  texture_info_ = texture_info;
   is_valid_ = true;
 }
 
@@ -127,4 +121,4 @@ TestMetalContext::TextureInfo TestMetalSurfaceImpl::GetTextureInfo() {
   return IsValid() ? texture_info_ : TestMetalContext::TextureInfo();
 }
 
-}  // namespace flutter
+}  // namespace flutter::testing

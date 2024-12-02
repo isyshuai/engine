@@ -2,28 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:async';
 import 'dart:developer' as developer;
-import 'dart:html' as html;
-import 'dart:typed_data';
+import 'dart:js_interop';
 
-import 'package:ui/src/engine/embedder.dart';
-import 'package:ui/src/engine/keyboard.dart';
-import 'package:ui/src/engine/mouse_cursor.dart';
-import 'package:ui/src/engine/navigation.dart';
-import 'package:ui/src/engine/platform_dispatcher.dart';
-import 'package:ui/src/engine/platform_views/content_manager.dart';
-import 'package:ui/src/engine/profiler.dart';
-import 'package:ui/src/engine/safe_browser_api.dart';
-import 'package:ui/src/engine/window.dart';
+import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' as ui;
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
+import 'package:web_test_fonts/web_test_fonts.dart';
 
 /// The mode the app is running in.
 /// Keep these in sync with the same constants on the framework-side under foundation/constants.dart.
 const bool kReleaseMode =
-    bool.fromEnvironment('dart.vm.product', defaultValue: false);
+    bool.fromEnvironment('dart.vm.product');
 /// A constant that is true if the application was compiled in profile mode.
 const bool kProfileMode =
-    bool.fromEnvironment('dart.vm.profile', defaultValue: false);
+    bool.fromEnvironment('dart.vm.profile');
 /// A constant that is true if the application was compiled in debug mode.
 const bool kDebugMode = !kReleaseMode && !kProfileMode;
 /// Returns mode of the app is running in as a string.
@@ -43,8 +37,6 @@ const String kProfilePrerollFrame = 'preroll_frame';
 /// to the renderer.
 const String kProfileApplyFrame = 'apply_frame';
 
-bool _engineInitialized = false;
-
 final List<ui.VoidCallback> _hotRestartListeners = <ui.VoidCallback>[];
 
 /// Requests that [listener] is called just before hot restarting the app.
@@ -58,24 +50,87 @@ void registerHotRestartListener(ui.VoidCallback listener) {
 /// such as removing static DOM listeners, prior to allowing the Dart runtime
 /// to re-initialize the program.
 void debugEmulateHotRestart() {
-  for (final ui.VoidCallback listener in _hotRestartListeners) {
-    listener();
+  // While hot restart listeners are executing, more listeners may be added. To
+  // avoid concurrent modification, the listeners are copies and emptied. If new
+  // listeners are added in the process, the loop will pick them up.
+  while (_hotRestartListeners.isNotEmpty) {
+    final List<ui.VoidCallback> copyOfListeners = _hotRestartListeners.toList();
+    _hotRestartListeners.clear();
+    for (final ui.VoidCallback listener in copyOfListeners) {
+      listener();
+    }
   }
 }
 
-/// This method performs one-time initialization of the Web environment that
-/// supports the Flutter framework.
+/// How far along the initialization process the engine is currently is.
 ///
-/// This is only available on the Web, as native Flutter configures the
-/// environment in the native embedder.
-void initializeEngine() {
-  if (_engineInitialized) {
+/// The initialization process starts with [none] and proceeds in increasing
+/// `index` number until [initialized].
+enum DebugEngineInitializationState {
+  /// Initialization hasn't started yet.
+  uninitialized,
+
+  /// The engine is initializing its non-UI services.
+  initializingServices,
+
+  /// The engine has initialized its non-UI services, but hasn't started
+  /// initializing the UI.
+  initializedServices,
+
+  /// The engine started attaching UI surfaces to the web page.
+  initializingUi,
+
+  /// The engine has fully completed initialization.
+  ///
+  /// At this point the framework can start using the engine for I/O, rendering,
+  /// etc.
+  ///
+  /// This is the final state of the engine.
+  initialized,
+}
+
+/// The current initialization state of the engine.
+///
+/// See [DebugEngineInitializationState] for possible states.
+DebugEngineInitializationState get initializationState => _initializationState;
+DebugEngineInitializationState _initializationState = DebugEngineInitializationState.uninitialized;
+
+/// Resets the state back to [DebugEngineInitializationState.uninitialized].
+///
+/// This is for testing only.
+void debugResetEngineInitializationState() {
+  _initializationState = DebugEngineInitializationState.uninitialized;
+}
+
+/// Initializes non-UI engine services.
+///
+/// Does not put any UI onto the page. It is therefore safe to call this
+/// function while the page is showing non-Flutter UI, such as a loading
+/// indicator, a splash screen, or in an add-to-app scenario where the host page
+/// is written using a different web framework.
+///
+/// See also:
+///
+///  * [initializeEngineUi], which is typically called after this function, and
+///    puts UI elements on the page.
+Future<void> initializeEngineServices({
+  ui_web.AssetManager? assetManager,
+  JsFlutterConfiguration? jsConfiguration
+}) async {
+  if (_initializationState != DebugEngineInitializationState.uninitialized) {
+    assert(() {
+      throw StateError(
+        'Invalid engine initialization state. `initializeEngineServices` was '
+        'called, but the engine has already started initialization and is '
+        'currently in state "$_initializationState".'
+      );
+    }());
     return;
   }
+  _initializationState = DebugEngineInitializationState.initializingServices;
 
-  // Setup the hook that allows users to customize URL strategy before running
-  // the app.
-  _addUrlStrategyListener();
+  // Store `jsConfiguration` so user settings are available to the engine.
+  configuration.setUserConfiguration(jsConfiguration);
 
   // Called by the Web runtime just before hot restarting the app.
   //
@@ -92,11 +147,6 @@ void initializeEngine() {
         developer.ServiceExtensionResponse.result('OK'));
   });
 
-  _engineInitialized = true;
-
-  // Initialize the FlutterViewEmbedder before initializing framework bindings.
-  ensureFlutterViewEmbedderInitialized();
-
   if (Profiler.isBenchmarkMode) {
     Profiler.ensureInitialized();
   }
@@ -107,8 +157,16 @@ void initializeEngine() {
     // fires.
     if (!waitingForAnimation) {
       waitingForAnimation = true;
-      html.window.requestAnimationFrame((num highResTime) {
-        frameTimingsOnVsync();
+      domWindow.requestAnimationFrame((JSNumber highResTime) {
+        FrameTimingRecorder.recordCurrentFrameVsync();
+
+        // In Flutter terminology "building a frame" consists of "beginning
+        // frame" and "drawing frame".
+        //
+        // We do not call `recordBuildFinish` from here because
+        // part of the rasterization process, particularly in the HTML
+        // renderer, takes place in the `SceneBuilder.build()`.
+        FrameTimingRecorder.recordCurrentFrameBuildStart();
 
         // Reset immediately, because `frameHandler` can schedule more frames.
         waitingForAnimation = false;
@@ -118,15 +176,9 @@ void initializeEngine() {
         // milliseconds as a double value, with sub-millisecond information
         // hidden in the fraction. So we first multiply it by 1000 to uncover
         // microsecond precision, and only then convert to `int`.
-        final int highResTimeMicroseconds = (1000 * highResTime).toInt();
+        final int highResTimeMicroseconds =
+            (1000 * highResTime.toDartDouble).toInt();
 
-        // In Flutter terminology "building a frame" consists of "beginning
-        // frame" and "drawing frame".
-        //
-        // We do not call `frameTimingsOnBuildFinish` from here because
-        // part of the rasterization process, particularly in the HTML
-        // renderer, takes place in the `SceneBuilder.build()`.
-        frameTimingsOnBuildStart();
         if (EnginePlatformDispatcher.instance.onBeginFrame != null) {
           EnginePlatformDispatcher.instance.invokeOnBeginFrame(
               Duration(microseconds: highResTimeMicroseconds));
@@ -136,61 +188,100 @@ void initializeEngine() {
           // TODO(yjbanov): technically Flutter flushes microtasks between
           //                onBeginFrame and onDrawFrame. We don't, which hasn't
           //                been an issue yet, but eventually we'll have to
-          //                implement it properly.
+          //                implement it properly. (Also see the to-do in
+          //                `EnginePlatformDispatcher.scheduleWarmUpFrame`).
           EnginePlatformDispatcher.instance.invokeOnDrawFrame();
         }
       });
     }
   };
 
-  Keyboard.initialize();
-  MouseCursor.initialize();
+  assetManager ??= ui_web.AssetManager(assetBase: configuration.assetBase);
+  _setAssetManager(assetManager);
+
+  Future<void> initializeRendererCallback () async => renderer.initialize();
+  await Future.wait<void>(<Future<void>>[initializeRendererCallback(), _downloadAssetFonts()]);
+  _initializationState = DebugEngineInitializationState.initializedServices;
 }
 
-void _addUrlStrategyListener() {
-  jsSetUrlStrategy = allowInterop((JsUrlStrategy? jsStrategy) {
-    customUrlStrategy =
-        jsStrategy == null ? null : CustomUrlStrategy.fromJs(jsStrategy);
-  });
-  registerHotRestartListener(() {
-    jsSetUrlStrategy = null;
-  });
+/// Initializes the UI surfaces for the Flutter framework to render to.
+///
+/// Must be called after [initializeEngineServices].
+///
+/// This function will start altering the HTML structure of the page. If used
+/// in an add-to-app scenario, the host page is expected to prepare for Flutter
+/// UI appearing on screen prior to calling this function.
+Future<void> initializeEngineUi() async {
+  if (_initializationState != DebugEngineInitializationState.initializedServices) {
+    assert(() {
+      throw StateError(
+        'Invalid engine initialization state. `initializeEngineUi` was '
+        'called while the engine initialization state was '
+        '"$_initializationState". `initializeEngineUi` can only be called '
+        'when the engine is in state '
+        '"${DebugEngineInitializationState.initializedServices}".'
+      );
+    }());
+    return;
+  }
+  _initializationState = DebugEngineInitializationState.initializingUi;
+
+  RawKeyboard.initialize(onMacOs: ui_web.browser.operatingSystem == ui_web.OperatingSystem.macOs);
+  KeyboardBinding.initInstance();
+
+  // Ensures Flutter renders a global "generator" meta-tag.
+  ensureMetaTag('generator', 'Flutter');
+
+  if (!configuration.multiViewEnabled) {
+    final EngineFlutterWindow implicitView =
+        ensureImplicitViewInitialized(hostElement: configuration.hostElement);
+    if (renderer is HtmlRenderer) {
+      ensureResourceManagerInitialized(implicitView);
+    }
+  }
+  _initializationState = DebugEngineInitializationState.initialized;
 }
 
-/// The shared instance of PlatformViewManager shared across the engine to handle
-/// rendering of PlatformViews into the web app.
-// TODO(dit): How to make this overridable from tests?
-final PlatformViewManager platformViewManager = PlatformViewManager();
+ui_web.AssetManager get engineAssetManager => _debugAssetManager ?? _assetManager!;
+ui_web.AssetManager? _assetManager;
+ui_web.AssetManager? _debugAssetManager;
 
-/// Converts a matrix represented using [Float64List] to one represented using
-/// [Float32List].
-///
-/// 32-bit precision is sufficient because Flutter Engine itself (as well as
-/// Skia) use 32-bit precision under the hood anyway.
-///
-/// 32-bit matrices require 2x less memory and in V8 they are allocated on the
-/// JavaScript heap, thus avoiding a malloc.
-///
-/// See also:
-/// * https://bugs.chromium.org/p/v8/issues/detail?id=9199
-/// * https://bugs.chromium.org/p/v8/issues/detail?id=2022
-Float32List toMatrix32(Float64List matrix64) {
-  final Float32List matrix32 = Float32List(16);
-  matrix32[15] = matrix64[15];
-  matrix32[14] = matrix64[14];
-  matrix32[13] = matrix64[13];
-  matrix32[12] = matrix64[12];
-  matrix32[11] = matrix64[11];
-  matrix32[10] = matrix64[10];
-  matrix32[9] = matrix64[9];
-  matrix32[8] = matrix64[8];
-  matrix32[7] = matrix64[7];
-  matrix32[6] = matrix64[6];
-  matrix32[5] = matrix64[5];
-  matrix32[4] = matrix64[4];
-  matrix32[3] = matrix64[3];
-  matrix32[2] = matrix64[2];
-  matrix32[1] = matrix64[1];
-  matrix32[0] = matrix64[0];
-  return matrix32;
+set debugOnlyAssetManager(ui_web.AssetManager? manager) => _debugAssetManager = manager;
+
+void _setAssetManager(ui_web.AssetManager assetManager) {
+  if (assetManager == _assetManager) {
+    return;
+  }
+
+  _assetManager = assetManager;
 }
+
+Future<void> _downloadAssetFonts() async {
+  renderer.fontCollection.clear();
+
+  if (ui_web.debugEmulateFlutterTesterEnvironment) {
+    // Load the embedded test font before loading fonts from the assets so that
+    // the embedded test font is the default (first) font.
+    await renderer.fontCollection.loadFontFromList(
+      EmbeddedTestFont.flutterTest.data,
+      fontFamily: EmbeddedTestFont.flutterTest.fontFamily
+    );
+  }
+
+  if (_debugAssetManager != null || _assetManager != null) {
+    await renderer.fontCollection.loadAssetFonts(await fetchFontManifest(ui_web.assetManager));
+  }
+}
+
+/// Whether to disable the font fallback system.
+///
+/// We need to disable font fallbacks for some framework tests because
+/// Flutter error messages may contain an arrow symbol which is not
+/// covered by ASCII fonts. This causes us to try to download the
+/// Noto Sans Symbols font, which kicks off a `Timer` which doesn't
+/// complete before the Widget tree is disposed (this is by design).
+bool get debugDisableFontFallbacks => _debugDisableFontFallbacks;
+set debugDisableFontFallbacks(bool value) {
+  _debugDisableFontFallbacks = value;
+}
+bool _debugDisableFontFallbacks = false;

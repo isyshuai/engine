@@ -1,3 +1,7 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 package io.flutter.embedding.android;
 
 import static org.junit.Assert.assertNotNull;
@@ -21,6 +25,8 @@ import android.os.Bundle;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.lifecycle.Lifecycle;
+import androidx.test.core.app.ApplicationProvider;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.embedding.engine.FlutterEngineCache;
 import io.flutter.embedding.engine.FlutterJNI;
@@ -31,6 +37,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityAware;
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
 import io.flutter.embedding.engine.systemchannels.LifecycleChannel;
 import io.flutter.plugin.platform.PlatformPlugin;
+import java.util.List;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -38,14 +45,14 @@ import org.mockito.InOrder;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.robolectric.Robolectric;
-import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
 @Config(manifest = Config.NONE)
-@RunWith(RobolectricTestRunner.class)
+@RunWith(AndroidJUnit4.class)
 public class FlutterAndroidComponentTest {
+  private final Context ctx = ApplicationProvider.getApplicationContext();
+
   @Test
   public void pluginsReceiveFlutterPluginBinding() {
     // ---- Test setup ----
@@ -53,8 +60,7 @@ public class FlutterAndroidComponentTest {
     FlutterLoader mockFlutterLoader = mock(FlutterLoader.class);
     FlutterJNI mockFlutterJni = mock(FlutterJNI.class);
     when(mockFlutterJni.isAttached()).thenReturn(true);
-    FlutterEngine cachedEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine cachedEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterEngineCache.getInstance().put("my_flutter_engine", cachedEngine);
 
     // Add mock plugin.
@@ -70,7 +76,7 @@ public class FlutterAndroidComponentTest {
 
     // --- Execute the behavior under test ---
     // Push the delegate through all lifecycle methods all the way to destruction.
-    delegate.onAttach(RuntimeEnvironment.application);
+    delegate.onAttach(ctx);
 
     // Verify that the plugin is attached to the FlutterEngine.
     ArgumentCaptor<FlutterPlugin.FlutterPluginBinding> pluginBindingCaptor =
@@ -108,8 +114,7 @@ public class FlutterAndroidComponentTest {
     FlutterLoader mockFlutterLoader = mock(FlutterLoader.class);
     FlutterJNI mockFlutterJni = mock(FlutterJNI.class);
     when(mockFlutterJni.isAttached()).thenReturn(true);
-    FlutterEngine cachedEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine cachedEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterEngineCache.getInstance().put("my_flutter_engine", cachedEngine);
 
     // Add mock plugin.
@@ -142,7 +147,7 @@ public class FlutterAndroidComponentTest {
 
     // --- Execute the behavior under test ---
     // Push the delegate through all lifecycle methods all the way to destruction.
-    delegate.onAttach(RuntimeEnvironment.application);
+    delegate.onAttach(ctx);
 
     // Verify plugin was given an ActivityPluginBinding.
     ArgumentCaptor<ActivityPluginBinding> pluginBindingCaptor =
@@ -181,8 +186,7 @@ public class FlutterAndroidComponentTest {
     FlutterLoader mockFlutterLoader = mock(FlutterLoader.class);
     FlutterJNI mockFlutterJni = mock(FlutterJNI.class);
     when(mockFlutterJni.isAttached()).thenReturn(true);
-    FlutterEngine cachedEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine cachedEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterEngineCache.getInstance().put("my_flutter_engine", cachedEngine);
 
     // Create a fake Host, which is required by the delegate.
@@ -194,7 +198,7 @@ public class FlutterAndroidComponentTest {
 
     // --- Execute the behavior under test ---
     // Push the delegate through all lifecycle methods all the way to destruction.
-    delegate.onAttach(RuntimeEnvironment.application);
+    delegate.onAttach(ctx);
     delegate.onRestoreInstanceState(null);
     delegate.onCreateView(null, null, null, 0, true);
     delegate.onStart();
@@ -214,14 +218,12 @@ public class FlutterAndroidComponentTest {
     FlutterLoader mockFlutterLoader = mock(FlutterLoader.class);
     FlutterJNI mockFlutterJni = mock(FlutterJNI.class);
     when(mockFlutterJni.isAttached()).thenReturn(true);
-    FlutterEngine cachedEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine cachedEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterEngineCache.getInstance().put("my_flutter_engine", cachedEngine);
     LifecycleChannel mockLifecycleChannel = mock(LifecycleChannel.class);
     when(cachedEngine.getLifecycleChannel()).thenReturn(mockLifecycleChannel);
 
-    Intent intent =
-        FlutterActivity.withCachedEngine("my_flutter_engine").build(RuntimeEnvironment.application);
+    Intent intent = FlutterActivity.withCachedEngine("my_flutter_engine").build(ctx);
     ActivityController<FlutterActivity> activityController1 =
         Robolectric.buildActivity(FlutterActivity.class, intent);
     activityController1.create().start().resume();
@@ -264,9 +266,12 @@ public class FlutterAndroidComponentTest {
     @NonNull
     @Override
     public Context getContext() {
-      return RuntimeEnvironment.application;
+      return ApplicationProvider.getApplicationContext();
     }
 
+    @SuppressWarnings("deprecation")
+    // Robolectric.setupActivity
+    // TODO(reidbaker): https://github.com/flutter/flutter/issues/133151
     @Nullable
     @Override
     public Activity getActivity() {
@@ -294,6 +299,12 @@ public class FlutterAndroidComponentTest {
       return "my_flutter_engine";
     }
 
+    @Nullable
+    @Override
+    public String getCachedEngineGroupId() {
+      return "my_flutter_engine_group";
+    }
+
     @Override
     public boolean shouldDestroyEngineWithHost() {
       return shouldDestroyEngineWithHost;
@@ -308,6 +319,12 @@ public class FlutterAndroidComponentTest {
     @Nullable
     @Override
     public String getDartEntrypointLibraryUri() {
+      return null;
+    }
+
+    @Nullable
+    @Override
+    public List<String> getDartEntrypointArgs() {
       return null;
     }
 
@@ -335,9 +352,8 @@ public class FlutterAndroidComponentTest {
       return TransparencyMode.transparent;
     }
 
-    @Nullable
     @Override
-    public SplashScreen provideSplashScreen() {
+    public ExclusiveAppComponent<Activity> getExclusiveAppComponent() {
       return null;
     }
 
@@ -376,6 +392,16 @@ public class FlutterAndroidComponentTest {
     }
 
     @Override
+    public boolean shouldDispatchAppLifecycleState() {
+      return true;
+    }
+
+    @Override
+    public boolean attachToEngineAutomatically() {
+      return true;
+    }
+
+    @Override
     public void onFlutterSurfaceViewCreated(@NonNull FlutterSurfaceView flutterSurfaceView) {}
 
     @Override
@@ -397,5 +423,8 @@ public class FlutterAndroidComponentTest {
     public boolean popSystemNavigator() {
       return false;
     }
+
+    @Override
+    public void setFrameworkHandlesBack(boolean frameworkHandlesBack) {}
   }
 }

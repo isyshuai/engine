@@ -2,57 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(yjbanov): this does not need to be in the production sources.
+//                https://github.com/flutter/flutter/issues/100394
+
 import 'dart:async';
-import 'dart:html' as html;
 
 import 'package:ui/ui.dart' as ui;
-
-import '../engine.dart';
-
-Future<void>? _testPlatformInitializedFuture;
-
-Future<dynamic> ensureTestPlatformInitializedThenRunTest(dynamic Function() body) {
-  if (_testPlatformInitializedFuture == null) {
-    ui.debugEmulateFlutterTesterEnvironment = true;
-
-    // Initializing the platform will ensure that the test font is loaded.
-    _testPlatformInitializedFuture =
-        ui.webOnlyInitializePlatform(assetManager: WebOnlyMockAssetManager());
-  }
-  return _testPlatformInitializedFuture!.then<dynamic>((_) => body());
-}
-
-Future<void>? _platformInitializedFuture;
-
-Future<void> initializeTestFlutterViewEmbedder({double devicePixelRatio = 3.0}) {
-  // Force-initialize FlutterViewEmbedder so it doesn't overwrite test pixel ratio.
-  ensureFlutterViewEmbedderInitialized();
-
-  // The following parameters are hard-coded in Flutter's test embedder. Since
-  // we don't have an embedder yet this is the lowest-most layer we can put
-  // this stuff in.
-  window.debugOverrideDevicePixelRatio(devicePixelRatio);
-  window.webOnlyDebugPhysicalSizeOverride =
-      ui.Size(800 * devicePixelRatio, 600 * devicePixelRatio);
-  scheduleFrameCallback = () {};
-  ui.debugEmulateFlutterTesterEnvironment = true;
-
-  // Initialize platform once and reuse across all tests.
-  if (_platformInitializedFuture != null) {
-    return _platformInitializedFuture!;
-  }
-  return _platformInitializedFuture =
-      ui.webOnlyInitializePlatform(assetManager: WebOnlyMockAssetManager());
-}
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
 const bool _debugLogHistoryActions = false;
 
 class TestHistoryEntry {
+  const TestHistoryEntry(this.state, this.title, this.url);
+
   final dynamic state;
   final String? title;
   final String url;
-
-  const TestHistoryEntry(this.state, this.title, this.url);
 
   @override
   String toString() {
@@ -65,7 +30,7 @@ class TestHistoryEntry {
 ///
 /// It keeps a list of history entries and event listeners in memory and
 /// manipulates them in order to achieve the desired functionality.
-class TestUrlStrategy extends UrlStrategy {
+class TestUrlStrategy implements ui_web.UrlStrategy {
   /// Creates a instance of [TestUrlStrategy] with an empty string as the
   /// path.
   factory TestUrlStrategy() => TestUrlStrategy.fromEntry(const TestHistoryEntry(null, null, ''));
@@ -159,10 +124,10 @@ class TestUrlStrategy extends UrlStrategy {
     });
   }
 
-  final List<html.EventListener> listeners = <html.EventListener>[];
+  final List<ui_web.PopStateListener> listeners = <ui_web.PopStateListener>[];
 
   @override
-  ui.VoidCallback addPopStateListener(html.EventListener fn) {
+  ui.VoidCallback addPopStateListener(ui_web.PopStateListener fn) {
     listeners.add(fn);
     return () {
       // Schedule a micro task here to avoid removing the listener during
@@ -182,16 +147,12 @@ class TestUrlStrategy extends UrlStrategy {
   /// like a real browser.
   void _firePopStateEvent() {
     assert(withinAppHistory);
-    final html.PopStateEvent event = html.PopStateEvent(
-      'popstate',
-      <String, dynamic>{'state': currentEntry.state},
-    );
     for (int i = 0; i < listeners.length; i++) {
-      listeners[i](event);
+      listeners[i](currentEntry.state);
     }
 
     if (_debugLogHistoryActions) {
-      print('$runtimeType: fired popstate event $event');
+      print('$runtimeType: fired popstate with state ${currentEntry.state}');
     }
   }
 

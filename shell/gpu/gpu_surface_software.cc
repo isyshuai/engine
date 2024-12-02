@@ -5,7 +5,11 @@
 #include "flutter/shell/gpu/gpu_surface_software.h"
 
 #include <memory>
+
+#include "flow/surface_frame.h"
 #include "flutter/fml/logging.h"
+
+#include "third_party/skia/include/core/SkSurface.h"
 
 namespace flutter {
 
@@ -32,10 +36,11 @@ std::unique_ptr<SurfaceFrame> GPUSurfaceSoftware::AcquireFrame(
   // external view embedder may want to render to the root surface.
   if (!render_to_surface_) {
     return std::make_unique<SurfaceFrame>(
-        nullptr, std::move(framebuffer_info),
-        [](const SurfaceFrame& surface_frame, SkCanvas* canvas) {
+        nullptr, framebuffer_info,
+        [](const SurfaceFrame& surface_frame, DlCanvas* canvas) {
           return true;
-        });
+        },
+        [](const SurfaceFrame& surface_frame) { return true; }, logical_size);
   }
 
   if (!IsValid()) {
@@ -60,21 +65,30 @@ std::unique_ptr<SurfaceFrame> GPUSurfaceSoftware::AcquireFrame(
   SkCanvas* canvas = backing_store->getCanvas();
   canvas->resetMatrix();
 
-  SurfaceFrame::SubmitCallback on_submit =
+  SurfaceFrame::EncodeCallback encode_callback =
       [self = weak_factory_.GetWeakPtr()](const SurfaceFrame& surface_frame,
-                                          SkCanvas* canvas) -> bool {
+                                          DlCanvas* canvas) -> bool {
     // If the surface itself went away, there is nothing more to do.
     if (!self || !self->IsValid() || canvas == nullptr) {
       return false;
     }
 
-    canvas->flush();
-
-    return self->delegate_->PresentBackingStore(surface_frame.SkiaSurface());
+    canvas->Flush();
+    return true;
   };
+  SurfaceFrame::SubmitCallback submit_callback =
+      [self = weak_factory_.GetWeakPtr()](const SurfaceFrame& surface_frame) {
+        // If the surface itself went away, there is nothing more to do.
+        if (!self || !self->IsValid()) {
+          return false;
+        }
+        return self->delegate_->PresentBackingStore(
+            surface_frame.SkiaSurface());
+      };
 
-  return std::make_unique<SurfaceFrame>(backing_store,
-                                        std::move(framebuffer_info), on_submit);
+  return std::make_unique<SurfaceFrame>(backing_store, framebuffer_info,
+                                        encode_callback, submit_callback,
+                                        logical_size);
 }
 
 // |Surface|

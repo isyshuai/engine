@@ -9,10 +9,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:litetest/litetest.dart';
+import 'package:test/test.dart';
 
 ByteData _makeByteData(String str) {
-  final Uint8List list = utf8.encode(str) as Uint8List;
+  final Uint8List list = utf8.encode(str);
   final ByteBuffer buffer = list.buffer;
   return ByteData.view(buffer);
 }
@@ -33,9 +33,9 @@ void main() {
     buffers.push(channel, data, callback);
     await buffers.drain(channel, (ByteData? drainedData, ui.PlatformMessageResponseCallback drainedCallback) async {
       expect(drainedData, equals(data));
-      assert(!called);
+      expect(called, isFalse);
       drainedCallback(drainedData);
-      assert(called);
+      expect(called, isTrue);
     });
   });
 
@@ -49,6 +49,7 @@ void main() {
     final Completer<void> completer = Completer<void>();
     scheduleMicrotask(() { log.add('before drain, microtask'); });
     log.add('before drain');
+
     buffers.drain(channel, (ByteData? drainedData, ui.PlatformMessageResponseCallback drainedCallback) async {
       log.add('callback');
       completer.complete();
@@ -108,13 +109,10 @@ void main() {
       switch (counter) {
         case 0:
           expect(drainedData, equals(two));
-          break;
         case 1:
           expect(drainedData, equals(three));
-          break;
         case 2:
           expect(drainedData, equals(four));
-          break;
       }
       counter += 1;
     });
@@ -209,21 +207,21 @@ void main() {
     buffers.push('a', three, (ByteData? data) { });
     log.add('top');
     buffers.setListener('a', (ByteData? data, ui.PlatformMessageResponseCallback callback) {
-      assert(data != null);
+      expect(data, isNotNull);
       log.add('a1: ${utf8.decode(data!.buffer.asUint8List())}');
     });
     log.add('-1');
     await null;
     log.add('-2');
     buffers.setListener('a', (ByteData? data, ui.PlatformMessageResponseCallback callback) {
-      assert(data != null);
+      expect(data, isNotNull);
       log.add('a2: ${utf8.decode(data!.buffer.asUint8List())}');
     });
     log.add('-3');
     await null;
     log.add('-4');
     buffers.setListener('b', (ByteData? data, ui.PlatformMessageResponseCallback callback) {
-      assert(data != null);
+      expect(data, isNotNull);
       log.add('b: ${utf8.decode(data!.buffer.asUint8List())}');
     });
     log.add('-5');
@@ -272,7 +270,7 @@ void main() {
     buffers.push('a', three, (ByteData? data) { });
     log.add('-1');
     buffers.setListener('a', (ByteData? data, ui.PlatformMessageResponseCallback callback) {
-      assert(data != null);
+      expect(data, isNotNull);
       log.add('a1: ${utf8.decode(data!.buffer.asUint8List())}');
     });
     await null; // handles one
@@ -281,7 +279,7 @@ void main() {
     await null;
     log.add('-3');
     buffers.setListener('a', (ByteData? data, ui.PlatformMessageResponseCallback callback) {
-      assert(data != null);
+      expect(data, isNotNull);
       log.add('a2: ${utf8.decode(data!.buffer.asUint8List())}');
     });
     log.add('-4');
@@ -353,6 +351,22 @@ void main() {
       'callback1: true',
       'callback2: true',
     ]);
+  });
+
+  test('ChannelBufferspush rejects names with nulls', () async {
+    const String channel = 'foo\u0000bar';
+    final ByteData blabla = _makeByteData('blabla');
+    final ui.ChannelBuffers buffers = ui.ChannelBuffers();
+
+    expect(
+      () => buffers.push(channel, blabla, (ByteData? data) { }),
+      throwsA(isA<AssertionError>().having((AssertionError e) => e.toString(), 'toString', contains('U+0000 NULL'))),
+    );
+
+    expect(
+      () => buffers.setListener(channel, (ByteData? data, ui.PlatformMessageResponseCallback callback) { }),
+      throwsA(isA<AssertionError>().having((AssertionError e) => e.toString(), 'toString', contains('U+0000 NULL'))),
+    );
   });
 }
 

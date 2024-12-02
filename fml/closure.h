@@ -29,18 +29,23 @@ using closure = std::function<void()>;
 ///             automatically at the end of the scope. This covers the cases
 ///             where there are early returns as well.
 ///
-class ScopedCleanupClosure {
+class ScopedCleanupClosure final {
  public:
   ScopedCleanupClosure() = default;
+
+  ScopedCleanupClosure(ScopedCleanupClosure&& other) {
+    closure_ = other.Release();
+  }
+
+  ScopedCleanupClosure& operator=(ScopedCleanupClosure&& other) {
+    closure_ = other.Release();
+    return *this;
+  }
 
   explicit ScopedCleanupClosure(const fml::closure& closure)
       : closure_(closure) {}
 
-  ~ScopedCleanupClosure() {
-    if (closure_) {
-      closure_();
-    }
-  }
+  ~ScopedCleanupClosure() { Reset(); }
 
   fml::closure SetClosure(const fml::closure& closure) {
     auto old_closure = closure_;
@@ -52,6 +57,13 @@ class ScopedCleanupClosure {
     fml::closure closure = closure_;
     closure_ = nullptr;
     return closure;
+  }
+
+  void Reset() {
+    if (closure_) {
+      closure_();
+      closure_ = nullptr;
+    }
   }
 
  private:

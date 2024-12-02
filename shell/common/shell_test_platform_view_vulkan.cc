@@ -4,25 +4,53 @@
 
 #include "flutter/shell/common/shell_test_platform_view_vulkan.h"
 
+#include <utility>
+
 #include "flutter/common/graphics/persistent_cache.h"
+#include "flutter/flutter_vma/flutter_skia_vma.h"
 #include "flutter/shell/common/context_options.h"
+#include "flutter/vulkan/vulkan_skia_proc_table.h"
 #include "flutter/vulkan/vulkan_utilities.h"
 
-namespace flutter {
-namespace testing {
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "third_party/skia/include/gpu/ganesh/vk/GrVkDirectContext.h"
+#include "third_party/skia/include/gpu/vk/VulkanExtensions.h"
+
+#if OS_FUCHSIA
+#define VULKAN_SO_PATH "libvulkan.so"
+#else
+#include "flutter/vulkan/swiftshader_path.h"
+#endif
+
+namespace flutter::testing {
+
+std::unique_ptr<ShellTestPlatformView> ShellTestPlatformView::CreateVulkan(
+    PlatformView::Delegate& delegate,
+    const TaskRunners& task_runners,
+    const std::shared_ptr<ShellTestVsyncClock>& vsync_clock,
+    const CreateVsyncWaiter& create_vsync_waiter,
+    const std::shared_ptr<ShellTestExternalViewEmbedder>&
+        shell_test_external_view_embedder,
+    const std::shared_ptr<const fml::SyncSwitch>& is_gpu_disabled_sync_switch) {
+  return std::make_unique<ShellTestPlatformViewVulkan>(
+      delegate, task_runners, vsync_clock, create_vsync_waiter,
+      shell_test_external_view_embedder);
+}
 
 ShellTestPlatformViewVulkan::ShellTestPlatformViewVulkan(
     PlatformView::Delegate& delegate,
-    TaskRunners task_runners,
+    const TaskRunners& task_runners,
     std::shared_ptr<ShellTestVsyncClock> vsync_clock,
     CreateVsyncWaiter create_vsync_waiter,
     std::shared_ptr<ShellTestExternalViewEmbedder>
         shell_test_external_view_embedder)
-    : ShellTestPlatformView(delegate, std::move(task_runners)),
+    : ShellTestPlatformView(delegate, task_runners),
       create_vsync_waiter_(std::move(create_vsync_waiter)),
-      vsync_clock_(vsync_clock),
-      proc_table_(fml::MakeRefCounted<vulkan::VulkanProcTable>()),
-      shell_test_external_view_embedder_(shell_test_external_view_embedder) {}
+      vsync_clock_(std::move(vsync_clock)),
+      proc_table_(fml::MakeRefCounted<vulkan::VulkanProcTable>(VULKAN_SO_PATH)),
+      shell_test_external_view_embedder_(
+          std::move(shell_test_external_view_embedder)) {}
 
 ShellTestPlatformViewVulkan::~ShellTestPlatformViewVulkan() = default;
 
@@ -61,9 +89,9 @@ ShellTestPlatformViewVulkan::OffScreenSurface::OffScreenSurface(
     fml::RefPtr<vulkan::VulkanProcTable> vk,
     std::shared_ptr<ShellTestExternalViewEmbedder>
         shell_test_external_view_embedder)
-    : valid_(false),
-      vk_(std::move(vk)),
-      shell_test_external_view_embedder_(shell_test_external_view_embedder) {
+    : vk_(std::move(vk)),
+      shell_test_external_view_embedder_(
+          std::move(shell_test_external_view_embedder)) {
   if (!vk_ || !vk_->HasAcquiredMandatoryProcAddresses()) {
     FML_DLOG(ERROR) << "Proc table has not acquired mandatory proc addresses.";
     return;
@@ -97,6 +125,11 @@ ShellTestPlatformViewVulkan::OffScreenSurface::OffScreenSurface(
     return;
   }
 
+  memory_allocator_ = FlutterSkiaVulkanMemoryAllocator::Make(
+      application_->GetAPIVersion(), application_->GetInstance(),
+      logical_device_->GetPhysicalDeviceHandle(), logical_device_->GetHandle(),
+      vk_, true);
+
   // Create the Skia GrContext.
   if (!CreateSkiaGrContext()) {
     FML_DLOG(ERROR) << "Could not create Skia context.";
@@ -107,9 +140,16 @@ ShellTestPlatformViewVulkan::OffScreenSurface::OffScreenSurface(
 }
 
 bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaGrContext() {
-  GrVkBackendContext backend_context;
+  skgpu::VulkanBackendContext backend_context;
+  skgpu::VulkanExtensions no_extensions;
+  // For now, Skia crashes if fDeviceFeatures is set but fVkExtensions is not.
+  backend_context.fVkExtensions = &no_extensions;
+  VkPhysicalDeviceFeatures features;
+  // It may be tempting to put features into backend_context here
+  // and pass just backend_context into the below function, however the pointers
+  // for features are const, so we won't be able to update them.
 
-  if (!CreateSkiaBackendContext(&backend_context)) {
+  if (!this->CreateSkiaBackendContext(&backend_context, &features)) {
     FML_DLOG(ERROR) << "Could not create Skia backend context.";
     return false;
   }
@@ -118,15 +158,14 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaGrContext() {
       MakeDefaultContextOptions(ContextType::kRender, GrBackendApi::kVulkan);
 
   sk_sp<GrDirectContext> context =
-      GrDirectContext::MakeVulkan(backend_context, options);
+      GrDirectContexts::MakeVulkan(backend_context, options);
 
   if (context == nullptr) {
     FML_DLOG(ERROR) << "Failed to create GrDirectContext";
     return false;
   }
 
-  context->setResourceCacheLimits(vulkan::kGrCacheMaxCount,
-                                  vulkan::kGrCacheMaxByteSize);
+  context->setResourceCacheLimit(vulkan::kGrCacheMaxByteSize);
 
   context_ = context;
 
@@ -134,16 +173,18 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaGrContext() {
 }
 
 bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaBackendContext(
-    GrVkBackendContext* context) {
-  auto getProc = vk_->CreateSkiaGetProc();
+    skgpu::VulkanBackendContext* context,
+    VkPhysicalDeviceFeatures* features) {
+  FML_CHECK(context);
+  FML_CHECK(features);
+  auto getProc = CreateSkiaGetProc(vk_);
 
   if (getProc == nullptr) {
     FML_DLOG(ERROR) << "GetProcAddress is null";
     return false;
   }
 
-  uint32_t skia_features = 0;
-  if (!logical_device_->GetPhysicalDeviceFeaturesSkia(&skia_features)) {
+  if (!logical_device_->GetPhysicalDeviceFeatures(features)) {
     FML_DLOG(ERROR) << "Failed to get Physical Device features";
     return false;
   }
@@ -153,11 +194,11 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaBackendContext(
   context->fDevice = logical_device_->GetHandle();
   context->fQueue = logical_device_->GetQueueHandle();
   context->fGraphicsQueueIndex = logical_device_->GetGraphicsQueueIndex();
-  context->fMinAPIVersion = application_->GetAPIVersion();
   context->fMaxAPIVersion = application_->GetAPIVersion();
-  context->fFeatures = skia_features;
+  context->fDeviceFeatures = features;
   context->fGetProc = std::move(getProc);
-  context->fOwnsInstanceAndDevice = false;
+  context->fMemoryAllocator = memory_allocator_;
+
   return true;
 }
 
@@ -172,19 +213,24 @@ ShellTestPlatformViewVulkan::OffScreenSurface::AcquireFrame(
     const SkISize& size) {
   auto image_info = SkImageInfo::Make(size, SkColorType::kRGBA_8888_SkColorType,
                                       SkAlphaType::kOpaque_SkAlphaType);
-  auto surface = SkSurface::MakeRenderTarget(context_.get(), SkBudgeted::kNo,
-                                             image_info, 0, nullptr);
-  SurfaceFrame::SubmitCallback callback = [](const SurfaceFrame&,
-                                             SkCanvas* canvas) -> bool {
-    canvas->flush();
+  auto surface = SkSurfaces::RenderTarget(context_.get(), skgpu::Budgeted::kNo,
+                                          image_info, 0, nullptr);
+
+  SurfaceFrame::EncodeCallback encode_callback = [](const SurfaceFrame&,
+                                                    DlCanvas* canvas) -> bool {
+    canvas->Flush();
     return true;
   };
+  SurfaceFrame::SubmitCallback submit_callback =
+      [](const SurfaceFrame&) -> bool { return true; };
 
   SurfaceFrame::FramebufferInfo framebuffer_info;
   framebuffer_info.supports_readback = true;
 
-  return std::make_unique<SurfaceFrame>(
-      std::move(surface), std::move(framebuffer_info), std::move(callback));
+  return std::make_unique<SurfaceFrame>(std::move(surface), framebuffer_info,
+                                        std::move(encode_callback),
+                                        std::move(submit_callback),
+                                        /*frame_size=*/SkISize::Make(800, 600));
 }
 
 GrDirectContext* ShellTestPlatformViewVulkan::OffScreenSurface::GetContext() {
@@ -198,5 +244,4 @@ SkMatrix ShellTestPlatformViewVulkan::OffScreenSurface::GetRootTransformation()
   return matrix;
 }
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing

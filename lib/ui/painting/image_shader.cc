@@ -5,6 +5,8 @@
 #include "flutter/lib/ui/painting/image_shader.h"
 #include "flutter/lib/ui/painting/image_filter.h"
 
+#include "flutter/display_list/effects/color_sources/dl_image_color_source.h"
+#include "flutter/lib/ui/painting/display_list_image_gpu.h"
 #include "flutter/lib/ui/ui_dart_state.h"
 #include "third_party/tonic/converter/dart_converter.h"
 #include "third_party/tonic/dart_args.h"
@@ -15,67 +17,58 @@ using tonic::ToDart;
 
 namespace flutter {
 
-static void ImageShader_constructor(Dart_NativeArguments args) {
-  DartCallConstructor(&ImageShader::Create, args);
-}
-
 IMPLEMENT_WRAPPERTYPEINFO(ui, ImageShader);
 
-#define FOR_EACH_BINDING(V) V(ImageShader, initWithImage)
-
-FOR_EACH_BINDING(DART_NATIVE_CALLBACK)
-
-void ImageShader::RegisterNatives(tonic::DartLibraryNatives* natives) {
-  natives->Register(
-      {{"ImageShader_constructor", ImageShader_constructor, 1, true},
-       FOR_EACH_BINDING(DART_REGISTER_NATIVE)});
+void ImageShader::Create(Dart_Handle wrapper) {
+  auto res = fml::MakeRefCounted<ImageShader>();
+  res->AssociateWithDartWrapper(wrapper);
 }
 
-fml::RefPtr<ImageShader> ImageShader::Create() {
-  return fml::MakeRefCounted<ImageShader>();
+Dart_Handle ImageShader::initWithImage(CanvasImage* image,
+                                       DlTileMode tmx,
+                                       DlTileMode tmy,
+                                       int filter_quality_index,
+                                       Dart_Handle matrix_handle) {
+  // CanvasImage should have already checked for a UI thread safe image.
+  if (!image || !image->image()->isUIThreadSafe()) {
+    return ToDart("ImageShader constructor called with non-genuine Image.");
+  }
+
+  image_ = image->image();
+  tonic::Float64List matrix4(matrix_handle);
+  DlMatrix local_matrix = ToDlMatrix(matrix4);
+  matrix4.Release();
+  sampling_is_locked_ = filter_quality_index >= 0;
+  DlImageSampling sampling =
+      sampling_is_locked_ ? ImageFilter::SamplingFromIndex(filter_quality_index)
+                          : DlImageSampling::kLinear;
+  cached_shader_ =
+      DlColorSource::MakeImage(image_, tmx, tmy, sampling, &local_matrix);
+  FML_DCHECK(cached_shader_->isUIThreadSafe());
+  return Dart_Null();
 }
 
-void ImageShader::initWithImage(CanvasImage* image,
-                                SkTileMode tmx,
-                                SkTileMode tmy,
-                                int filter_quality_index,
-                                const tonic::Float64List& matrix4) {
-  if (!image) {
-    Dart_ThrowException(
-        ToDart("ImageShader constructor called with non-genuine Image."));
-    return;
+std::shared_ptr<DlColorSource> ImageShader::shader(DlImageSampling sampling) {
+  const DlImageColorSource* image_shader = cached_shader_->asImage();
+  FML_DCHECK(image_shader);
+  if (sampling_is_locked_ || sampling == image_shader->sampling()) {
+    return cached_shader_;
   }
-  sk_image_ = UIDartState::CreateGPUObject(image->image());
-  tmx_ = tmx;
-  tmy_ = tmy;
-  local_matrix_ = ToSkMatrix(matrix4);
-  if (filter_quality_index >= 0) {
-    cached_sampling_ = ImageFilter::SamplingFromIndex(filter_quality_index);
-    sampling_is_locked_ = true;
-  } else {
-    sampling_is_locked_ = false;
-  }
-}
-
-sk_sp<SkShader> ImageShader::shader(SkSamplingOptions sampling) {
-  if (sampling_is_locked_) {
-    sampling = cached_sampling_;
-  }
-  if (!cached_shader_.skia_object() || cached_sampling_ != sampling) {
-    cached_sampling_ = sampling;
-    cached_shader_ =
-        UIDartState::CreateGPUObject(sk_image_.skia_object()->makeShader(
-            tmx_, tmy_, sampling, &local_matrix_));
-  }
-  return cached_shader_.skia_object();
+  return image_shader->WithSampling(sampling);
 }
 
 int ImageShader::width() {
-  return sk_image_.skia_object()->width();
+  return image_->width();
 }
 
 int ImageShader::height() {
-  return sk_image_.skia_object()->height();
+  return image_->height();
+}
+
+void ImageShader::dispose() {
+  cached_shader_.reset();
+  image_.reset();
+  ClearDartWrapper();
 }
 
 ImageShader::ImageShader() = default;

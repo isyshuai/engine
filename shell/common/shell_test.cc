@@ -20,10 +20,58 @@
 namespace flutter {
 namespace testing {
 
+constexpr int64_t kImplicitViewId = 0;
+
+FrameContent ViewContent::NoViews() {
+  return std::map<int64_t, ViewContent>();
+}
+
+FrameContent ViewContent::DummyView(double width, double height) {
+  FrameContent result;
+  result[kImplicitViewId] = ViewContent{
+      .viewport_metrics = {1.0, width, height, 22, 0},
+      .builder = {},
+  };
+  return result;
+}
+
+FrameContent ViewContent::DummyView(flutter::ViewportMetrics viewport_metrics) {
+  FrameContent result;
+  result[kImplicitViewId] = ViewContent{
+      .viewport_metrics = std::move(viewport_metrics),
+      .builder = {},
+  };
+  return result;
+}
+
+FrameContent ViewContent::ImplicitView(double width,
+                                       double height,
+                                       LayerTreeBuilder builder) {
+  FrameContent result;
+  result[kImplicitViewId] = ViewContent{
+      .viewport_metrics = {1.0, width, height, 22, 0},
+      .builder = std::move(builder),
+  };
+  return result;
+}
+
 ShellTest::ShellTest()
     : thread_host_("io.flutter.test." + GetCurrentTestName() + ".",
-                   ThreadHost::Type::Platform | ThreadHost::Type::IO |
-                       ThreadHost::Type::UI | ThreadHost::Type::RASTER) {}
+                   ThreadHost::Type::kPlatform | ThreadHost::Type::kIo |
+                       ThreadHost::Type::kUi | ThreadHost::Type::kRaster) {}
+
+void ShellTest::SendPlatformMessage(Shell* shell,
+                                    std::unique_ptr<PlatformMessage> message) {
+  shell->OnPlatformViewDispatchPlatformMessage(std::move(message));
+}
+
+void ShellTest::SendSemanticsAction(Shell* shell,
+                                    int32_t node_id,
+                                    SemanticsAction action,
+                                    fml::MallocMapping args) {
+  shell->OnPlatformViewDispatchSemanticsAction(node_id, action,
+                                               std::move(args));
+}
 
 void ShellTest::SendEnginePlatformMessage(
     Shell* shell,
@@ -85,16 +133,18 @@ void ShellTest::RestartEngine(Shell* shell, RunConfiguration configuration) {
   ASSERT_TRUE(restarted.get_future().get());
 }
 
-void ShellTest::VSyncFlush(Shell* shell, bool& will_draw_new_frame) {
+void ShellTest::VSyncFlush(Shell* shell, bool* will_draw_new_frame) {
   fml::AutoResetWaitableEvent latch;
   fml::TaskRunner::RunNowOrPostTask(
       shell->GetTaskRunners().GetPlatformTaskRunner(),
-      [shell, &will_draw_new_frame, &latch] {
+      [shell, will_draw_new_frame, &latch] {
         // The following UI task ensures that all previous UI tasks are flushed.
         fml::AutoResetWaitableEvent ui_latch;
         shell->GetTaskRunners().GetUITaskRunner()->PostTask(
-            [&ui_latch, &will_draw_new_frame]() {
-              will_draw_new_frame = true;
+            [&ui_latch, will_draw_new_frame]() {
+              if (will_draw_new_frame != nullptr) {
+                *will_draw_new_frame = true;
+              }
               ui_latch.Signal();
             });
 
@@ -129,7 +179,8 @@ void ShellTest::SetViewportMetrics(Shell* shell, double width, double height) {
       22,                     // physical touch slop
       std::vector<double>(),  // display features bounds
       std::vector<int>(),     // display features type
-      std::vector<int>()      // display features state
+      std::vector<int>(),     // display features state
+      0                       // Display ID
   };
   // Set viewport to nonempty, and call Animator::BeginFrame to make the layer
   // tree pipeline nonempty. Without either of this, the layer tree below
@@ -138,7 +189,7 @@ void ShellTest::SetViewportMetrics(Shell* shell, double width, double height) {
   shell->GetTaskRunners().GetUITaskRunner()->PostTask(
       [&latch, engine = shell->weak_engine_, viewport_metrics]() {
         if (engine) {
-          engine->SetViewportMetrics(std::move(viewport_metrics));
+          engine->SetViewportMetrics(kImplicitViewId, viewport_metrics);
           const auto frame_begin_time = fml::TimePoint::Now();
           const auto frame_end_time =
               frame_begin_time + fml::TimeDelta::FromSecondsF(1.0 / 60.0);
@@ -146,13 +197,14 @@ void ShellTest::SetViewportMetrics(Shell* shell, double width, double height) {
               std::make_unique<FrameTimingsRecorder>();
           recorder->RecordVsync(frame_begin_time, frame_end_time);
           engine->animator_->BeginFrame(std::move(recorder));
+          engine->animator_->EndFrame();
         }
         latch.Signal();
       });
   latch.Wait();
 }
 
-void ShellTest::NotifyIdle(Shell* shell, int64_t deadline) {
+void ShellTest::NotifyIdle(Shell* shell, fml::TimeDelta deadline) {
   fml::AutoResetWaitableEvent latch;
   shell->GetTaskRunners().GetUITaskRunner()->PostTask(
       [&latch, engine = shell->weak_engine_, deadline]() {
@@ -164,23 +216,22 @@ void ShellTest::NotifyIdle(Shell* shell, int64_t deadline) {
   latch.Wait();
 }
 
-void ShellTest::PumpOneFrame(Shell* shell,
-                             double width,
-                             double height,
-                             LayerTreeBuilder builder) {
-  PumpOneFrame(shell, {1.0, width, height, 22}, std::move(builder));
+void ShellTest::PumpOneFrame(Shell* shell) {
+  PumpOneFrame(shell, ViewContent::DummyView());
 }
 
-void ShellTest::PumpOneFrame(Shell* shell,
-                             flutter::ViewportMetrics viewport_metrics,
-                             LayerTreeBuilder builder) {
+void ShellTest::PumpOneFrame(Shell* shell, FrameContent frame_content) {
   // Set viewport to nonempty, and call Animator::BeginFrame to make the layer
   // tree pipeline nonempty. Without either of this, the layer tree below
   // won't be rasterized.
   fml::AutoResetWaitableEvent latch;
+  fml::WeakPtr<RuntimeDelegate> runtime_delegate = shell->weak_engine_;
   shell->GetTaskRunners().GetUITaskRunner()->PostTask(
-      [&latch, engine = shell->weak_engine_, viewport_metrics]() {
-        engine->SetViewportMetrics(std::move(viewport_metrics));
+      [&latch, engine = shell->weak_engine_, &frame_content,
+       runtime_delegate]() {
+        for (auto& [view_id, view_content] : frame_content) {
+          engine->SetViewportMetrics(view_id, view_content.viewport_metrics);
+        }
         const auto frame_begin_time = fml::TimePoint::Now();
         const auto frame_end_time =
             frame_begin_time + fml::TimeDelta::FromSecondsF(1.0 / 60.0);
@@ -188,34 +239,39 @@ void ShellTest::PumpOneFrame(Shell* shell,
             std::make_unique<FrameTimingsRecorder>();
         recorder->RecordVsync(frame_begin_time, frame_end_time);
         engine->animator_->BeginFrame(std::move(recorder));
-        latch.Signal();
-      });
-  latch.Wait();
 
-  latch.Reset();
-  // Call |Render| to rasterize a layer tree and trigger |OnFrameRasterized|
-  fml::WeakPtr<RuntimeDelegate> runtime_delegate = shell->weak_engine_;
-  shell->GetTaskRunners().GetUITaskRunner()->PostTask(
-      [&latch, runtime_delegate, &builder, viewport_metrics]() {
-        auto layer_tree = std::make_unique<LayerTree>(
-            SkISize::Make(viewport_metrics.physical_width,
-                          viewport_metrics.physical_height),
-            static_cast<float>(viewport_metrics.device_pixel_ratio));
-        SkMatrix identity;
-        identity.setIdentity();
-        auto root_layer = std::make_shared<TransformLayer>(identity);
-        layer_tree->set_root_layer(root_layer);
-        if (builder) {
-          builder(root_layer);
+        // The BeginFrame phase and the EndFrame phase must be performed in a
+        // single task, otherwise a normal vsync might be inserted in between,
+        // causing flaky assertion errors.
+
+        for (auto& [view_id, view_content] : frame_content) {
+          SkMatrix identity;
+          identity.setIdentity();
+          auto root_layer = std::make_shared<TransformLayer>(identity);
+          auto layer_tree = std::make_unique<LayerTree>(
+              root_layer,
+              SkISize::Make(view_content.viewport_metrics.physical_width,
+                            view_content.viewport_metrics.physical_height));
+          float device_pixel_ratio = static_cast<float>(
+              view_content.viewport_metrics.device_pixel_ratio);
+          if (view_content.builder) {
+            view_content.builder(root_layer);
+          }
+          runtime_delegate->Render(view_id, std::move(layer_tree),
+                                   device_pixel_ratio);
         }
-        runtime_delegate->Render(std::move(layer_tree));
+        engine->animator_->EndFrame();
         latch.Signal();
       });
   latch.Wait();
 }
 
-void ShellTest::DispatchFakePointerData(Shell* shell) {
+void ShellTest::DispatchFakePointerData(Shell* shell, double x) {
   auto packet = std::make_unique<PointerDataPacket>(1);
+  packet->SetPointerData(0, PointerData{
+                                .change = PointerData::Change::kHover,
+                                .physical_x = x,
+                            });
   DispatchPointerData(shell, std::move(packet));
 }
 
@@ -252,7 +308,7 @@ void ShellTest::StorePersistentCache(PersistentCache* cache,
 void ShellTest::OnServiceProtocol(
     Shell* shell,
     ServiceProtocolEnum some_protocol,
-    fml::RefPtr<fml::TaskRunner> task_runner,
+    const fml::RefPtr<fml::TaskRunner>& task_runner,
     const ServiceProtocol::Handler::ServiceProtocolMap& params,
     rapidjson::Document* response) {
   std::promise<bool> finished;
@@ -285,7 +341,7 @@ std::shared_ptr<txt::FontCollection> ShellTest::GetFontCollection(
 Settings ShellTest::CreateSettingsForFixture() {
   Settings settings;
   settings.leak_vm = false;
-  settings.task_observer_add = [](intptr_t key, fml::closure handler) {
+  settings.task_observer_add = [](intptr_t key, const fml::closure& handler) {
     fml::MessageLoop::GetCurrent().AddTaskObserver(key, handler);
   };
   settings.task_observer_remove = [](intptr_t key) {
@@ -315,47 +371,23 @@ fml::TimePoint ShellTest::GetLatestFrameTargetTime(Shell* shell) const {
   return shell->GetLatestFrameTargetTime();
 }
 
-std::unique_ptr<Shell> ShellTest::CreateShell(Settings settings,
-                                              bool simulate_vsync) {
-  return CreateShell(std::move(settings), GetTaskRunnersForFixture(),
-                     simulate_vsync);
+std::unique_ptr<Shell> ShellTest::CreateShell(
+    const Settings& settings,
+    std::optional<TaskRunners> task_runners) {
+  return CreateShell({
+      .settings = settings,
+      .task_runners = std::move(task_runners),
+  });
 }
 
-std::unique_ptr<Shell> ShellTest::CreateShell(
-    Settings settings,
-    TaskRunners task_runners,
-    bool simulate_vsync,
-    std::shared_ptr<ShellTestExternalViewEmbedder>
-        shell_test_external_view_embedder,
-    bool is_gpu_disabled,
-    ShellTestPlatformView::BackendType rendering_backend,
-    Shell::CreateCallback<PlatformView> platform_view_create_callback) {
-  const auto vsync_clock = std::make_shared<ShellTestVsyncClock>();
-
-  CreateVsyncWaiter create_vsync_waiter = [&]() {
-    if (simulate_vsync) {
-      return static_cast<std::unique_ptr<VsyncWaiter>>(
-          std::make_unique<ShellTestVsyncWaiter>(task_runners, vsync_clock));
-    } else {
-      return static_cast<std::unique_ptr<VsyncWaiter>>(
-          std::make_unique<VsyncWaiterFallback>(task_runners, true));
-    }
-  };
-
+std::unique_ptr<Shell> ShellTest::CreateShell(const Config& config) {
+  TaskRunners task_runners = config.task_runners.has_value()
+                                 ? config.task_runners.value()
+                                 : GetTaskRunnersForFixture();
+  Shell::CreateCallback<PlatformView> platform_view_create_callback =
+      config.platform_view_create_callback;
   if (!platform_view_create_callback) {
-    platform_view_create_callback = [vsync_clock,                        //
-                                     &create_vsync_waiter,               //
-                                     shell_test_external_view_embedder,  //
-                                     rendering_backend                   //
-    ](Shell& shell) {
-      return ShellTestPlatformView::Create(shell,                             //
-                                           shell.GetTaskRunners(),            //
-                                           vsync_clock,                       //
-                                           std::move(create_vsync_waiter),    //
-                                           rendering_backend,                 //
-                                           shell_test_external_view_embedder  //
-      );
-    };
+    platform_view_create_callback = ShellTestPlatformViewBuilder({});
   }
 
   Shell::CreateCallback<Rasterizer> rasterizer_create_callback =
@@ -363,10 +395,10 @@ std::unique_ptr<Shell> ShellTest::CreateShell(
 
   return Shell::Create(flutter::PlatformData(),        //
                        task_runners,                   //
-                       settings,                       //
+                       config.settings,                //
                        platform_view_create_callback,  //
                        rasterizer_create_callback,     //
-                       is_gpu_disabled                 //
+                       config.is_gpu_disabled          //
   );
 }
 
@@ -375,7 +407,7 @@ void ShellTest::DestroyShell(std::unique_ptr<Shell> shell) {
 }
 
 void ShellTest::DestroyShell(std::unique_ptr<Shell> shell,
-                             TaskRunners task_runners) {
+                             const TaskRunners& task_runners) {
   fml::AutoResetWaitableEvent latch;
   fml::TaskRunner::RunNowOrPostTask(task_runners.GetPlatformTaskRunner(),
                                     [&shell, &latch]() mutable {
@@ -385,30 +417,8 @@ void ShellTest::DestroyShell(std::unique_ptr<Shell> shell,
   latch.Wait();
 }
 
-bool ShellTest::IsAnimatorRunning(Shell* shell) {
-  fml::AutoResetWaitableEvent latch;
-  bool running = false;
-  if (!shell) {
-    return running;
-  }
-  fml::TaskRunner::RunNowOrPostTask(
-      shell->GetTaskRunners().GetUITaskRunner(), [shell, &running, &latch]() {
-        if (shell && shell->engine_ && shell->engine_->animator_) {
-          running = !shell->engine_->animator_->paused_;
-        }
-        latch.Signal();
-      });
-  latch.Wait();
-  return running;
-}
-
-size_t ShellTest::GetLiveTrackedPathCount(
-    std::shared_ptr<VolatilePathTracker> tracker) {
-  return std::count_if(
-      tracker->paths_.begin(), tracker->paths_.end(),
-      [](std::weak_ptr<VolatilePathTracker::TrackedPath> path) {
-        return path.lock();
-      });
+void ShellTest::TurnOffGPU(Shell* shell, bool value) {
+  shell->is_gpu_disabled_sync_switch_->SetSwitch(value);
 }
 
 }  // namespace testing

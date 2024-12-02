@@ -8,7 +8,7 @@ import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' as ui;
 
-import 'common.dart';
+import '../common/test_initialization.dart';
 
 void main() {
   internalBootstrapBrowserTest(() => testMain);
@@ -17,7 +17,7 @@ void main() {
 void testMain() {
   group('$LayerScene', () {
     setUpAll(() async {
-      await ui.webOnlyInitializePlatform();
+      await bootstrapAndRunApp();
     });
 
     test('toImage returns an image', () async {
@@ -41,7 +41,7 @@ void testMain() {
       expect(builder, isA<LayerSceneBuilder>());
 
       builder.pushOffset(0, 0);
-      builder.addPicture(const ui.Offset(0, 0), picture);
+      builder.addPicture(ui.Offset.zero, picture);
 
       final ui.Scene scene = builder.build();
 
@@ -59,6 +59,5 @@ void testMain() {
       final ui.Scene scene = builder.build();
       expect(scene, isNotNull);
     });
-    // TODO(hterkelsen): https://github.com/flutter/flutter/issues/60040
-  }, skip: isIosSafari);
+  });
 }

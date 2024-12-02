@@ -8,7 +8,7 @@ import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' hide TextStyle;
-import '../../common.dart';
+import '../../common/test_initialization.dart';
 import '../screenshot.dart';
 
 // TODO(yjbanov): unskip Firefox tests when Firefox implements WebGL in headless mode.
@@ -19,16 +19,9 @@ void main() {
 }
 
 Future<void> testMain() async {
-  const double screenWidth = 500.0;
-  const double screenHeight = 500.0;
-  const Rect screenRect = Rect.fromLTWH(0, 0, screenWidth, screenHeight);
-
-  setUp(() async {
-    debugEmulateFlutterTesterEnvironment = true;
-    await webOnlyInitializePlatform();
-    webOnlyFontCollection.debugRegisterTestFonts();
-    await webOnlyFontCollection.ensureFontsLoaded();
-  });
+  setUpUnitTests(
+    setUpTestViewDimensions: false,
+  );
 
   test('Should draw linear gradient using rectangle.', () async {
     final RecordingCanvas rc =
@@ -40,9 +33,26 @@ Future<void> testMain() async {
         const <Color>[Color(0xFFcfdfd2), Color(0xFF042a85)]);
     rc.drawRect(shaderRect, paint);
     expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
-    await canvasScreenshot(rc, 'linear_gradient_rect',
-        region: screenRect,
-        maxDiffRatePercent: 0.01);
+    await canvasScreenshot(rc, 'linear_gradient_rect');
+  });
+
+  test('Should blend linear gradient with alpha channel correctly.', () async {
+    const Rect canvasRect = Rect.fromLTRB(0, 0, 500, 500);
+    final RecordingCanvas rc =
+        RecordingCanvas(canvasRect);
+    final SurfacePaint backgroundPaint = SurfacePaint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFF0000);
+    rc.drawRect(canvasRect, backgroundPaint);
+
+    const Rect shaderRect = Rect.fromLTRB(50, 50, 300, 300);
+    final SurfacePaint paint = SurfacePaint()..shader = Gradient.linear(
+        Offset(shaderRect.left, shaderRect.top),
+        Offset(shaderRect.right, shaderRect.bottom),
+        const <Color>[Color(0x00000000), Color(0xFF0000FF)]);
+    rc.drawRect(shaderRect, paint);
+    expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
+    await canvasScreenshot(rc, 'linear_gradient_rect_alpha');
   });
 
   test('Should draw linear gradient with transform.', () async {
@@ -73,10 +83,8 @@ Future<void> testMain() async {
       yOffset += 120;
     }
     expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
-    await canvasScreenshot(rc, 'linear_gradient_oval_matrix',
-        region: screenRect,
-        maxDiffRatePercent: 0.2);
-  });
+    await canvasScreenshot(rc, 'linear_gradient_oval_matrix');
+  }, skip: isFirefox);
 
   // Regression test for https://github.com/flutter/flutter/issues/50010
   test('Should draw linear gradient using rounded rect.', () async {
@@ -89,9 +97,7 @@ Future<void> testMain() async {
         const <Color>[Color(0xFFcfdfd2), Color(0xFF042a85)]);
     rc.drawRRect(RRect.fromRectAndRadius(shaderRect, const Radius.circular(16)), paint);
     expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
-    await canvasScreenshot(rc, 'linear_gradient_rounded_rect',
-        region: screenRect,
-        maxDiffRatePercent: 0.1);
+    await canvasScreenshot(rc, 'linear_gradient_rounded_rect');
   });
 
   test('Should draw tiled repeated linear gradient with transform.', () async {
@@ -117,8 +123,7 @@ Future<void> testMain() async {
       yOffset += 120;
     }
     expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
-    await canvasScreenshot(rc, 'linear_gradient_tiled_repeated_rect',
-        region: screenRect);
+    await canvasScreenshot(rc, 'linear_gradient_tiled_repeated_rect');
   }, skip: isFirefox);
 
   test('Should draw tiled mirrored linear gradient with transform.', () async {
@@ -144,7 +149,6 @@ Future<void> testMain() async {
       yOffset += 120;
     }
     expect(rc.renderStrategy.hasArbitraryPaint, isTrue);
-    await canvasScreenshot(rc, 'linear_gradient_tiled_mirrored_rect',
-        region: screenRect);
+    await canvasScreenshot(rc, 'linear_gradient_tiled_mirrored_rect');
   }, skip: isFirefox);
 }

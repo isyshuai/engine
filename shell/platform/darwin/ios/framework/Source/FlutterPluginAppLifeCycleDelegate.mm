@@ -7,25 +7,30 @@
 #include "flutter/fml/logging.h"
 #include "flutter/fml/paths.h"
 #include "flutter/lib/ui/plugins/callback_cache.h"
-#import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterViewController.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterCallbackCache_Internal.h"
+
+FLUTTER_ASSERT_ARC
 
 static const char* kCallbackCacheSubDir = "Library/Caches/";
 
-static const SEL selectorsHandledByPlugins[] = {
+static const SEL kSelectorsHandledByPlugins[] = {
     @selector(application:didReceiveRemoteNotification:fetchCompletionHandler:),
     @selector(application:performFetchWithCompletionHandler:)};
 
 @interface FlutterPluginAppLifeCycleDelegate ()
-- (void)handleDidEnterBackground:(NSNotification*)notification;
-- (void)handleWillEnterForeground:(NSNotification*)notification;
-- (void)handleWillResignActive:(NSNotification*)notification;
-- (void)handleDidBecomeActive:(NSNotification*)notification;
-- (void)handleWillTerminate:(NSNotification*)notification;
+- (void)handleDidEnterBackground:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions");
+- (void)handleWillEnterForeground:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions");
+- (void)handleWillResignActive:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions");
+- (void)handleDidBecomeActive:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions");
+- (void)handleWillTerminate:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions");
 @end
 
 @implementation FlutterPluginAppLifeCycleDelegate {
-  NSMutableArray* _notificationUnsubscribers;
   UIBackgroundTaskIdentifier _debugBackgroundTask;
 
   // Weak references to registered plugins.
@@ -34,18 +39,13 @@ static const SEL selectorsHandledByPlugins[] = {
 
 - (void)addObserverFor:(NSString*)name selector:(SEL)selector {
   [[NSNotificationCenter defaultCenter] addObserver:self selector:selector name:name object:nil];
-  __block NSObject* blockSelf = self;
-  dispatch_block_t unsubscribe = ^{
-    [[NSNotificationCenter defaultCenter] removeObserver:blockSelf name:name object:nil];
-  };
-  [_notificationUnsubscribers addObject:[[unsubscribe copy] autorelease]];
 }
 
 - (instancetype)init {
   if (self = [super init]) {
-    _notificationUnsubscribers = [[NSMutableArray alloc] init];
     std::string cachePath = fml::paths::JoinPaths({getenv("HOME"), kCallbackCacheSubDir});
     [FlutterCallbackCache setCachePath:[NSString stringWithUTF8String:cachePath.c_str()]];
+#if not APPLICATION_EXTENSION_API_ONLY
     [self addObserverFor:UIApplicationDidEnterBackgroundNotification
                 selector:@selector(handleDidEnterBackground:)];
     [self addObserverFor:UIApplicationWillEnterForegroundNotification
@@ -56,19 +56,11 @@ static const SEL selectorsHandledByPlugins[] = {
                 selector:@selector(handleDidBecomeActive:)];
     [self addObserverFor:UIApplicationWillTerminateNotification
                 selector:@selector(handleWillTerminate:)];
-    _delegates = [[NSPointerArray weakObjectsPointerArray] retain];
+#endif
+    _delegates = [NSPointerArray weakObjectsPointerArray];
     _debugBackgroundTask = UIBackgroundTaskInvalid;
   }
   return self;
-}
-
-- (void)dealloc {
-  for (dispatch_block_t unsubscribe in _notificationUnsubscribers) {
-    unsubscribe();
-  }
-  [_notificationUnsubscribers release];
-  [_delegates release];
-  [super dealloc];
 }
 
 static BOOL IsPowerOfTwo(NSUInteger x) {
@@ -76,7 +68,7 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
 }
 
 - (BOOL)isSelectorAddedDynamically:(SEL)selector {
-  for (const SEL& aSelector : selectorsHandledByPlugins) {
+  for (const SEL& aSelector : kSelectorsHandledByPlugins) {
     if (selector == aSelector) {
       return YES;
     }
@@ -134,7 +126,8 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
   return YES;
 }
 
-- (void)handleDidEnterBackground:(NSNotification*)notification {
+- (void)handleDidEnterBackground:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions") {
   UIApplication* application = [UIApplication sharedApplication];
 #if FLUTTER_RUNTIME_MODE == FLUTTER_RUNTIME_MODE_DEBUG
   // The following keeps the Flutter session alive when the device screen locks
@@ -166,7 +159,8 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
   }
 }
 
-- (void)handleWillEnterForeground:(NSNotification*)notification {
+- (void)handleWillEnterForeground:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions") {
   UIApplication* application = [UIApplication sharedApplication];
 #if FLUTTER_RUNTIME_MODE == FLUTTER_RUNTIME_MODE_DEBUG
   if (_debugBackgroundTask != UIBackgroundTaskInvalid) {
@@ -184,7 +178,8 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
   }
 }
 
-- (void)handleWillResignActive:(NSNotification*)notification {
+- (void)handleWillResignActive:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions") {
   UIApplication* application = [UIApplication sharedApplication];
   for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
     if (!delegate) {
@@ -196,7 +191,8 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
   }
 }
 
-- (void)handleDidBecomeActive:(NSNotification*)notification {
+- (void)handleDidBecomeActive:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions") {
   UIApplication* application = [UIApplication sharedApplication];
   for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
     if (!delegate) {
@@ -208,7 +204,8 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
   }
 }
 
-- (void)handleWillTerminate:(NSNotification*)notification {
+- (void)handleWillTerminate:(NSNotification*)notification
+    NS_EXTENSION_UNAVAILABLE_IOS("Disallowed in app extensions") {
   UIApplication* application = [UIApplication sharedApplication];
   for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
     if (!delegate) {
@@ -295,29 +292,24 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
        willPresentNotification:(UNNotification*)notification
          withCompletionHandler:
-             (void (^)(UNNotificationPresentationOptions options))completionHandler
-    NS_AVAILABLE_IOS(10_0) {
-  if (@available(iOS 10.0, *)) {
-    for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
-      if ([delegate respondsToSelector:_cmd]) {
-        [delegate userNotificationCenter:center
-                 willPresentNotification:notification
-                   withCompletionHandler:completionHandler];
-      }
+             (void (^)(UNNotificationPresentationOptions options))completionHandler {
+  for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
+    if ([delegate respondsToSelector:_cmd]) {
+      [delegate userNotificationCenter:center
+               willPresentNotification:notification
+                 withCompletionHandler:completionHandler];
     }
   }
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
     didReceiveNotificationResponse:(UNNotificationResponse*)response
-             withCompletionHandler:(void (^)(void))completionHandler NS_AVAILABLE_IOS(10_0) {
-  if (@available(iOS 10.0, *)) {
-    for (id<FlutterApplicationLifeCycleDelegate> delegate in _delegates) {
-      if ([delegate respondsToSelector:_cmd]) {
-        [delegate userNotificationCenter:center
-            didReceiveNotificationResponse:response
-                     withCompletionHandler:completionHandler];
-      }
+             withCompletionHandler:(void (^)(void))completionHandler {
+  for (id<FlutterApplicationLifeCycleDelegate> delegate in _delegates) {
+    if ([delegate respondsToSelector:_cmd]) {
+      [delegate userNotificationCenter:center
+          didReceiveNotificationResponse:response
+                   withCompletionHandler:completionHandler];
     }
   }
 }
@@ -374,7 +366,7 @@ static BOOL IsPowerOfTwo(NSUInteger x) {
 
 - (void)application:(UIApplication*)application
     performActionForShortcutItem:(UIApplicationShortcutItem*)shortcutItem
-               completionHandler:(void (^)(BOOL succeeded))completionHandler NS_AVAILABLE_IOS(9_0) {
+               completionHandler:(void (^)(BOOL succeeded))completionHandler {
   for (NSObject<FlutterApplicationLifeCycleDelegate>* delegate in _delegates) {
     if (!delegate) {
       continue;

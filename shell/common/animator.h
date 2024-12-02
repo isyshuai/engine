@@ -34,27 +34,60 @@ class Animator final {
     virtual void OnAnimatorBeginFrame(fml::TimePoint frame_target_time,
                                       uint64_t frame_number) = 0;
 
-    virtual void OnAnimatorNotifyIdle(int64_t deadline) = 0;
+    virtual void OnAnimatorNotifyIdle(fml::TimeDelta deadline) = 0;
 
-    virtual void OnAnimatorDraw(
-        std::shared_ptr<Pipeline<flutter::LayerTree>> pipeline,
-        std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder) = 0;
+    virtual void OnAnimatorUpdateLatestFrameTargetTime(
+        fml::TimePoint frame_target_time) = 0;
 
-    virtual void OnAnimatorDrawLastLayerTree(
+    virtual void OnAnimatorDraw(std::shared_ptr<FramePipeline> pipeline) = 0;
+
+    virtual void OnAnimatorDrawLastLayerTrees(
         std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder) = 0;
   };
 
   Animator(Delegate& delegate,
-           TaskRunners task_runners,
+           const TaskRunners& task_runners,
            std::unique_ptr<VsyncWaiter> waiter);
 
   ~Animator();
 
-  void RequestFrame(bool regenerate_layer_tree = true);
+  void RequestFrame(bool regenerate_layer_trees = true);
 
-  void Render(std::unique_ptr<flutter::LayerTree> layer_tree);
+  //--------------------------------------------------------------------------
+  /// @brief    Tells the Animator that all views that should render for this
+  ///           frame have been rendered.
+  ///
+  ///           In regular frames, since all `Render` calls must take place
+  ///           during a vsync task, the Animator knows that all views have
+  ///           been rendered at the end of the vsync task, therefore calling
+  ///           this method is not needed.
+  ///
+  ///           However, the engine might decide to start it a bit earlier, for
+  ///           example, if the engine decides that no more views can be
+  ///           rendered, so that the rasterization can start a bit earlier.
+  ///
+  ///           This method is also useful in warm-up frames. In a warm up
+  ///           frame, `Animator::Render` is called out of vsync tasks, and
+  ///           Animator requires an explicit end-of-frame call to know when to
+  ///           send the layer trees to the pipeline.
+  ///
+  ///           For more about warm up frames, see
+  ///           `PlatformDispatcher.scheduleWarmUpFrame`.
+  ///
+  void OnAllViewsRendered();
 
-  const VsyncWaiter& GetVsyncWaiter() const;
+  //--------------------------------------------------------------------------
+  /// @brief    Tells the Animator that this frame needs to render another view.
+  ///
+  ///           This method must be called during a vsync callback, or
+  ///           technically, between Animator::BeginFrame and Animator::EndFrame
+  ///           (both private methods). Otherwise, this call will be ignored.
+  ///
+  void Render(int64_t view_id,
+              std::unique_ptr<flutter::LayerTree> layer_tree,
+              float device_pixel_ratio);
+
+  const std::weak_ptr<VsyncWaiter> GetVsyncWaiter() const;
 
   //--------------------------------------------------------------------------
   /// @brief    Schedule a secondary callback to be executed right after the
@@ -74,30 +107,26 @@ class Animator final {
   void ScheduleSecondaryVsyncCallback(uintptr_t id,
                                       const fml::closure& callback);
 
-  void Start();
-
-  void Stop();
-
-  void SetDimensionChangePending();
-
   // Enqueue |trace_flow_id| into |trace_flow_ids_|.  The flow event will be
   // ended at either the next frame, or the next vsync interval with no active
-  // active rendering.
+  // rendering.
   void EnqueueTraceFlowId(uint64_t trace_flow_id);
 
  private:
-  using LayerTreePipeline = Pipeline<flutter::LayerTree>;
+  // Animator's work during a vsync is split into two methods, BeginFrame and
+  // EndFrame. The two methods should be called synchronously back-to-back to
+  // avoid being interrupted by a regular vsync. The reason to split them is to
+  // allow ShellTest::PumpOneFrame to insert a Render in between.
 
   void BeginFrame(std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder);
+  void EndFrame();
 
-  bool CanReuseLastLayerTree();
+  bool CanReuseLastLayerTrees();
 
-  void DrawLastLayerTree(
+  void DrawLastLayerTrees(
       std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder);
 
   void AwaitVSync();
-
-  const char* FrameParity();
 
   // Clear |trace_flow_ids_| if |frame_scheduled_| is false.
   void ScheduleMaybeClearTraceFlowIds();
@@ -107,17 +136,15 @@ class Animator final {
   std::shared_ptr<VsyncWaiter> waiter_;
 
   std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder_;
+  std::unordered_map<int64_t, std::unique_ptr<LayerTreeTask>>
+      layer_trees_tasks_;
   uint64_t frame_request_number_ = 1;
-  fml::TimePoint dart_frame_deadline_;
-  std::shared_ptr<LayerTreePipeline> layer_tree_pipeline_;
+  fml::TimeDelta dart_frame_deadline_;
+  std::shared_ptr<FramePipeline> layer_tree_pipeline_;
   fml::Semaphore pending_frame_semaphore_;
-  LayerTreePipeline::ProducerContinuation producer_continuation_;
-  bool paused_ = true;
-  bool regenerate_layer_tree_ = false;
+  FramePipeline::ProducerContinuation producer_continuation_;
+  bool regenerate_layer_trees_ = false;
   bool frame_scheduled_ = false;
-  int notify_idle_task_id_ = 0;
-  bool dimension_change_pending_ = false;
-  SkISize last_layer_tree_size_ = {0, 0};
   std::deque<uint64_t> trace_flow_ids_;
   bool has_rendered_ = false;
 

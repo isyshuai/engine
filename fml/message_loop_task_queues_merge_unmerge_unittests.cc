@@ -5,6 +5,7 @@
 #define FML_USED_ON_EMBEDDER
 
 #include <thread>
+#include <utility>
 
 #include "flutter/fml/message_loop_task_queues.h"
 #include "flutter/fml/synchronization/count_down_latch.h"
@@ -19,7 +20,7 @@ class TestWakeable : public fml::Wakeable {
  public:
   using WakeUpCall = std::function<void(const fml::TimePoint)>;
 
-  explicit TestWakeable(WakeUpCall call) : wake_up_call_(call) {}
+  explicit TestWakeable(WakeUpCall call) : wake_up_call_(std::move(call)) {}
 
   void WakeUp(fml::TimePoint time_point) override { wake_up_call_(time_point); }
 
@@ -27,7 +28,7 @@ class TestWakeable : public fml::Wakeable {
   WakeUpCall wake_up_call_;
 };
 
-static int CountRemainingTasks(fml::RefPtr<MessageLoopTaskQueues> task_queue,
+static int CountRemainingTasks(fml::MessageLoopTaskQueues* task_queue,
                                const TaskQueueId& queue_id,
                                bool run_invocation = false) {
   const auto now = ChronoTicksSinceEpoch();
@@ -53,13 +54,11 @@ TEST(MessageLoopTaskQueueMergeUnmerge,
   auto queue_id_1 = task_queue->CreateTaskQueue();
   auto queue_id_2 = task_queue->CreateTaskQueue();
 
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
   ASSERT_EQ(1u, task_queue->GetNumPendingTasks(queue_id_1));
 
   task_queue->Merge(queue_id_1, queue_id_2);
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
 
   ASSERT_EQ(2u, task_queue->GetNumPendingTasks(queue_id_1));
   ASSERT_EQ(0u, task_queue->GetNumPendingTasks(queue_id_2));
@@ -72,8 +71,7 @@ TEST(MessageLoopTaskQueueMergeUnmerge,
   auto queue_id_1 = task_queue->CreateTaskQueue();
   auto queue_id_2 = task_queue->CreateTaskQueue();
 
-  task_queue->RegisterTask(
-      queue_id_2, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_2, []() {}, ChronoTicksSinceEpoch());
   ASSERT_EQ(1u, task_queue->GetNumPendingTasks(queue_id_2));
 
   task_queue->Merge(queue_id_1, queue_id_2);
@@ -87,10 +85,8 @@ TEST(MessageLoopTaskQueueMergeUnmerge, MergeUnmergeTasksPreserved) {
   auto queue_id_1 = task_queue->CreateTaskQueue();
   auto queue_id_2 = task_queue->CreateTaskQueue();
 
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
-  task_queue->RegisterTask(
-      queue_id_2, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_2, []() {}, ChronoTicksSinceEpoch());
 
   ASSERT_EQ(1u, task_queue->GetNumPendingTasks(queue_id_1));
   ASSERT_EQ(1u, task_queue->GetNumPendingTasks(queue_id_2));
@@ -191,15 +187,15 @@ TEST(MessageLoopTaskQueueMergeUnmerge, MergeInvokesBothWakeables) {
 
   fml::CountDownLatch latch(2);
 
-  task_queue->SetWakeable(
-      queue_id_1,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch.CountDown(); }));
-  task_queue->SetWakeable(
-      queue_id_2,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch.CountDown(); }));
+  auto wakeable1 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch.CountDown(); });
+  auto wakeable2 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch.CountDown(); });
 
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->SetWakeable(queue_id_1, wakeable1.get());
+  task_queue->SetWakeable(queue_id_2, wakeable2.get());
+
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
 
   task_queue->Merge(queue_id_1, queue_id_2);
 
@@ -217,17 +213,16 @@ TEST(MessageLoopTaskQueueMergeUnmerge,
 
   fml::AutoResetWaitableEvent latch_1, latch_2;
 
-  task_queue->SetWakeable(
-      queue_id_1,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch_1.Signal(); }));
-  task_queue->SetWakeable(
-      queue_id_2,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch_2.Signal(); }));
+  auto wakeable1 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch_1.Signal(); });
+  auto wakeable2 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch_2.Signal(); });
 
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
-  task_queue->RegisterTask(
-      queue_id_2, []() {}, ChronoTicksSinceEpoch());
+  task_queue->SetWakeable(queue_id_1, wakeable1.get());
+  task_queue->SetWakeable(queue_id_2, wakeable2.get());
+
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_2, []() {}, ChronoTicksSinceEpoch());
 
   task_queue->Merge(queue_id_1, queue_id_2);
   task_queue->Unmerge(queue_id_1, queue_id_2);
@@ -250,13 +245,13 @@ TEST(MessageLoopTaskQueueMergeUnmerge, GetTasksToRunNowBlocksMerge) {
   fml::AutoResetWaitableEvent wake_up_start, wake_up_end, merge_start,
       merge_end;
 
-  task_queue->RegisterTask(
-      queue_id_1, []() {}, ChronoTicksSinceEpoch());
-  task_queue->SetWakeable(queue_id_1,
-                          new TestWakeable([&](fml::TimePoint wake_time) {
-                            wake_up_start.Signal();
-                            wake_up_end.Wait();
-                          }));
+  auto wakeable = std::make_unique<TestWakeable>([&](fml::TimePoint wake_time) {
+    wake_up_start.Signal();
+    wake_up_end.Wait();
+  });
+
+  task_queue->RegisterTask(queue_id_1, []() {}, ChronoTicksSinceEpoch());
+  task_queue->SetWakeable(queue_id_1, wakeable.get());
 
   std::thread tasks_to_run_now_thread(
       [&]() { CountRemainingTasks(task_queue, queue_id_1); });
@@ -291,19 +286,19 @@ TEST(MessageLoopTaskQueueMergeUnmerge,
 
   fml::CountDownLatch latch(2);
 
-  task_queue->SetWakeable(
-      queue_id_1,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch.CountDown(); }));
-  task_queue->SetWakeable(
-      queue_id_2,
-      new TestWakeable([&](fml::TimePoint wake_time) { latch.CountDown(); }));
+  auto wakeable1 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch.CountDown(); });
+  auto wakeable2 = std::make_unique<TestWakeable>(
+      [&](fml::TimePoint wake_time) { latch.CountDown(); });
+
+  task_queue->SetWakeable(queue_id_1, wakeable1.get());
+  task_queue->SetWakeable(queue_id_2, wakeable2.get());
 
   task_queue->RegisterTask(
       queue_id_2, [&]() { task_queue->Merge(queue_id_1, queue_id_2); },
       ChronoTicksSinceEpoch());
 
-  task_queue->RegisterTask(
-      queue_id_2, []() {}, ChronoTicksSinceEpoch());
+  task_queue->RegisterTask(queue_id_2, []() {}, ChronoTicksSinceEpoch());
 
   ASSERT_EQ(CountRemainingTasks(task_queue, queue_id_2, true), 1);
   ASSERT_EQ(CountRemainingTasks(task_queue, queue_id_1, true), 1);

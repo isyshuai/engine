@@ -9,13 +9,14 @@ import android.graphics.Matrix;
 import android.graphics.Path;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.accessibility.AccessibilityEvent;
 import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import io.flutter.embedding.android.AndroidTouchProcessor;
+import io.flutter.util.ViewUtils;
 
 /**
  * A view that applies the {@link io.flutter.embedding.engine.mutatorsstack.FlutterMutatorsStack} to
@@ -49,31 +50,6 @@ public class FlutterMutatorView extends FrameLayout {
     this(context, 1, /* androidTouchProcessor=*/ null);
   }
 
-  /**
-   * Determines if the current view or any descendant view has focus.
-   *
-   * @param root The root view.
-   * @return True if the current view or any descendant view has focus.
-   */
-  @VisibleForTesting
-  public static boolean childHasFocus(@Nullable View root) {
-    if (root == null) {
-      return false;
-    }
-    if (root.hasFocus()) {
-      return true;
-    }
-    if (root instanceof ViewGroup) {
-      final ViewGroup viewGroup = (ViewGroup) root;
-      for (int idx = 0; idx < viewGroup.getChildCount(); idx++) {
-        if (childHasFocus(viewGroup.getChildAt(idx))) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   @Nullable @VisibleForTesting ViewTreeObserver.OnGlobalFocusChangeListener activeFocusListener;
 
   /**
@@ -95,7 +71,7 @@ public class FlutterMutatorView extends FrameLayout {
           new ViewTreeObserver.OnGlobalFocusChangeListener() {
             @Override
             public void onGlobalFocusChanged(View oldFocus, View newFocus) {
-              userFocusListener.onFocusChange(mutatorView, childHasFocus(mutatorView));
+              userFocusListener.onFocusChange(mutatorView, ViewUtils.childHasFocus(mutatorView));
             }
           };
       observer.addOnGlobalFocusChangeListener(activeFocusListener);
@@ -183,6 +159,21 @@ public class FlutterMutatorView extends FrameLayout {
   @Override
   public boolean onInterceptTouchEvent(MotionEvent event) {
     return true;
+  }
+
+  @Override
+  public boolean requestSendAccessibilityEvent(View child, AccessibilityEvent event) {
+    final View embeddedView = getChildAt(0);
+    if (embeddedView != null
+        && embeddedView.getImportantForAccessibility()
+            == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) {
+      return false;
+    }
+    // Forward the request only if the embedded view is in the Flutter accessibility tree.
+    // The embedded view may be ignored when the framework doesn't populate a SemanticNode
+    // for the current platform view.
+    // See AccessibilityBridge for more.
+    return super.requestSendAccessibilityEvent(child, event);
   }
 
   @Override

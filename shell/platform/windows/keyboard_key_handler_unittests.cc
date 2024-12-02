@@ -4,8 +4,18 @@
 #include "flutter/shell/platform/windows/keyboard_key_handler.h"
 
 #include <rapidjson/document.h>
+#include <map>
 #include <memory>
+#include "flutter/shell/platform/common/client_wrapper/include/flutter/method_result_functions.h"
+#include "flutter/shell/platform/common/client_wrapper/include/flutter/standard_message_codec.h"
+#include "flutter/shell/platform/common/client_wrapper/include/flutter/standard_method_codec.h"
+#include "flutter/shell/platform/embedder/test_utils/key_codes.g.h"
+#include "flutter/shell/platform/embedder/test_utils/proc_table_replacement.h"
+#include "flutter/shell/platform/windows/keyboard_utils.h"
+#include "flutter/shell/platform/windows/testing/engine_modifier.h"
+#include "flutter/shell/platform/windows/testing/test_binary_messenger.h"
 
+#include "flutter/fml/macros.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -14,13 +24,73 @@ namespace testing {
 
 namespace {
 
+static constexpr char kChannelName[] = "flutter/keyboard";
+static constexpr char kGetKeyboardStateMethod[] = "getKeyboardState";
+
+constexpr SHORT kStateMaskToggled = 0x01;
+constexpr SHORT kStateMaskPressed = 0x80;
+
+class TestFlutterKeyEvent : public FlutterKeyEvent {
+ public:
+  TestFlutterKeyEvent(const FlutterKeyEvent& src,
+                      FlutterKeyEventCallback callback,
+                      void* user_data)
+      : character_str(src.character), callback(callback), user_data(user_data) {
+    struct_size = src.struct_size;
+    timestamp = src.timestamp;
+    type = src.type;
+    physical = src.physical;
+    logical = src.logical;
+    character = character_str.c_str();
+    synthesized = src.synthesized;
+  }
+
+  TestFlutterKeyEvent(TestFlutterKeyEvent&& source)
+      : FlutterKeyEvent(source),
+        callback(std::move(source.callback)),
+        user_data(source.user_data) {
+    character = character_str.c_str();
+  }
+
+  FlutterKeyEventCallback callback;
+  void* user_data;
+
+ private:
+  const std::string character_str;
+};
+
+class TestKeystate {
+ public:
+  void Set(int virtual_key, bool pressed, bool toggled_on = false) {
+    state_[virtual_key] = (pressed ? kStateMaskPressed : 0) |
+                          (toggled_on ? kStateMaskToggled : 0);
+  }
+
+  SHORT Get(int virtual_key) { return state_[virtual_key]; }
+
+  KeyboardKeyEmbedderHandler::GetKeyStateHandler Getter() {
+    return [this](int virtual_key) { return Get(virtual_key); };
+  }
+
+ private:
+  std::map<int, SHORT> state_;
+};
+
+UINT DefaultMapVkToScan(UINT virtual_key, bool extended) {
+  return MapVirtualKey(virtual_key,
+                       extended ? MAPVK_VK_TO_VSC_EX : MAPVK_VK_TO_VSC);
+}
+
 static constexpr int kHandledScanCode = 20;
 static constexpr int kHandledScanCode2 = 22;
 static constexpr int kUnhandledScanCode = 21;
 
 constexpr uint64_t kScanCodeShiftRight = 0x36;
-constexpr uint64_t kScanCodeControlLeft = 0x1D;
+constexpr uint64_t kScanCodeControl = 0x1D;
 constexpr uint64_t kScanCodeAltLeft = 0x38;
+
+constexpr uint64_t kScanCodeKeyA = 0x1e;
+constexpr uint64_t kVirtualKeyA = 0x41;
 
 typedef std::function<void(bool)> Callback;
 typedef std::function<void(Callback&)> CallbackHandler;
@@ -87,34 +157,62 @@ class MockKeyHandlerDelegate
     callback_handler(hook_history->back().callback);
   }
 
+  virtual void SyncModifiersIfNeeded(int modifiers_state) {
+    // Do Nothing
+  }
+
+  virtual std::map<uint64_t, uint64_t> GetPressedState() {
+    std::map<uint64_t, uint64_t> Empty_State;
+    return Empty_State;
+  }
+
   CallbackHandler callback_handler;
   int delegate_id;
   std::list<KeyboardHookCall>* hook_history;
+
+ private:
+  FML_DISALLOW_COPY_AND_ASSIGN(MockKeyHandlerDelegate);
 };
 
-class TestKeyboardKeyHandler : public KeyboardKeyHandler {
- public:
-  explicit TestKeyboardKeyHandler(EventDispatcher redispatch_event)
-      : KeyboardKeyHandler(redispatch_event) {}
-
-  bool HasRedispatched() { return RedispatchedCount() > 0; }
+enum KeyEventResponse {
+  kNoResponse,
+  kHandled,
+  kUnhandled,
 };
+
+static KeyEventResponse key_event_response = kNoResponse;
+
+void OnKeyEventResult(bool handled) {
+  key_event_response = handled ? kHandled : kUnhandled;
+}
+
+void SimulateKeyboardMessage(TestBinaryMessenger* messenger,
+                             const std::string& method_name,
+                             std::unique_ptr<EncodableValue> arguments,
+                             MethodResult<EncodableValue>* result_handler) {
+  MethodCall<> call(method_name, std::move(arguments));
+  auto message = StandardMethodCodec::GetInstance().EncodeMethodCall(call);
+
+  EXPECT_TRUE(messenger->SimulateEngineMessage(
+      kChannelName, message->data(), message->size(),
+      [&result_handler](const uint8_t* reply, size_t reply_size) {
+        StandardMethodCodec::GetInstance().DecodeAndProcessResponseEnvelope(
+            reply, reply_size, result_handler);
+      }));
+}
 
 }  // namespace
+
+using namespace ::flutter::testing::keycodes;
 
 TEST(KeyboardKeyHandlerTest, SingleDelegateWithAsyncResponds) {
   std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
 
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  bool delegate_handled = false;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
+  TestBinaryMessenger messenger([](const std::string& channel,
+                                   const uint8_t* message, size_t message_size,
+                                   BinaryReply reply) {});
+  KeyboardKeyHandler handler(&messenger);
+
   // Add one delegate
   auto delegate = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
   handler.AddDelegate(std::move(delegate));
@@ -122,38 +220,35 @@ TEST(KeyboardKeyHandlerTest, SingleDelegateWithAsyncResponds) {
   /// Test 1: One event that is handled by the framework
 
   // Dispatch a key event
-  delegate_handled =
-      handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, true);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
+  handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, true,
+                       OnKeyEventResult);
+  EXPECT_EQ(key_event_response, kNoResponse);
   EXPECT_EQ(hook_history.size(), 1);
   EXPECT_EQ(hook_history.back().delegate_id, 1);
   EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
   EXPECT_EQ(hook_history.back().was_down, true);
 
-  EXPECT_EQ(handler.HasRedispatched(), false);
+  EXPECT_EQ(key_event_response, kNoResponse);
   hook_history.back().callback(true);
-  EXPECT_EQ(redispatch_scancode, 0);
+  EXPECT_EQ(key_event_response, kHandled);
 
-  EXPECT_EQ(handler.HasRedispatched(), false);
+  key_event_response = kNoResponse;
   hook_history.clear();
 
   /// Test 2: Two events that are unhandled by the framework
 
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
+  handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, false,
+                       OnKeyEventResult);
+  EXPECT_EQ(key_event_response, kNoResponse);
   EXPECT_EQ(hook_history.size(), 1);
   EXPECT_EQ(hook_history.back().delegate_id, 1);
   EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
   EXPECT_EQ(hook_history.back().was_down, false);
 
   // Dispatch another key event
-  delegate_handled =
-      handler.KeyboardHook(65, kHandledScanCode2, WM_KEYUP, L'b', false, true);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
+  handler.KeyboardHook(65, kHandledScanCode2, WM_KEYUP, L'b', false, true,
+                       OnKeyEventResult);
+  EXPECT_EQ(key_event_response, kNoResponse);
   EXPECT_EQ(hook_history.size(), 2);
   EXPECT_EQ(hook_history.back().delegate_id, 1);
   EXPECT_EQ(hook_history.back().scancode, kHandledScanCode2);
@@ -161,37 +256,24 @@ TEST(KeyboardKeyHandlerTest, SingleDelegateWithAsyncResponds) {
 
   // Resolve the second event first to test out-of-order response
   hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode2);
+  EXPECT_EQ(key_event_response, kUnhandled);
+  key_event_response = kNoResponse;
 
   // Resolve the first event then
   hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode);
+  EXPECT_EQ(key_event_response, kUnhandled);
 
-  EXPECT_EQ(handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false,
-                                 false),
-            false);
-  EXPECT_EQ(
-      handler.KeyboardHook(65, kHandledScanCode2, WM_KEYUP, L'b', false, false),
-      false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
   hook_history.clear();
-  redispatch_scancode = 0;
+  key_event_response = kNoResponse;
 }
 
 TEST(KeyboardKeyHandlerTest, SingleDelegateWithSyncResponds) {
   std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
 
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  bool delegate_handled = false;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
+  TestBinaryMessenger messenger([](const std::string& channel,
+                                   const uint8_t* message, size_t message_size,
+                                   BinaryReply reply) {});
+  KeyboardKeyHandler handler(&messenger);
   // Add one delegate
   auto delegate = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
   CallbackHandler& delegate_handler = delegate->callback_handler;
@@ -201,531 +283,88 @@ TEST(KeyboardKeyHandlerTest, SingleDelegateWithSyncResponds) {
 
   // Dispatch a key event
   delegate_handler = respond_true;
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
+  handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, false,
+                       OnKeyEventResult);
+  EXPECT_EQ(key_event_response, kHandled);
   EXPECT_EQ(hook_history.size(), 1);
   EXPECT_EQ(hook_history.back().delegate_id, 1);
   EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
   EXPECT_EQ(hook_history.back().was_down, false);
 
-  EXPECT_EQ(handler.HasRedispatched(), false);
   hook_history.clear();
 
   /// Test 2: An event unhandled by the framework
 
   delegate_handler = respond_false;
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode);
+  handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, false,
+                       OnKeyEventResult);
+  EXPECT_EQ(key_event_response, kUnhandled);
   EXPECT_EQ(hook_history.size(), 1);
   EXPECT_EQ(hook_history.back().delegate_id, 1);
   EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
   EXPECT_EQ(hook_history.back().was_down, false);
 
-  EXPECT_EQ(handler.HasRedispatched(), true);
-
-  // Resolve the event
-  EXPECT_EQ(handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false,
-                                 false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
   hook_history.clear();
-  redispatch_scancode = 0;
+  key_event_response = kNoResponse;
 }
 
-TEST(KeyboardKeyHandlerTest, WithTwoAsyncDelegates) {
-  std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
+TEST(KeyboardKeyHandlerTest, HandlerGetPressedState) {
+  TestKeystate key_state;
 
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  bool delegate_handled = false;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
+  TestBinaryMessenger messenger([](const std::string& channel,
+                                   const uint8_t* message, size_t message_size,
+                                   BinaryReply reply) {});
+  KeyboardKeyHandler handler(&messenger);
 
-  auto delegate1 = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
-  CallbackHandler& delegate1_handler = delegate1->callback_handler;
-  handler.AddDelegate(std::move(delegate1));
+  std::unique_ptr<KeyboardKeyEmbedderHandler> embedder_handler =
+      std::make_unique<KeyboardKeyEmbedderHandler>(
+          [](const FlutterKeyEvent& event, FlutterKeyEventCallback callback,
+             void* user_data) {},
+          key_state.Getter(), DefaultMapVkToScan);
+  handler.AddDelegate(std::move(embedder_handler));
 
-  auto delegate2 = std::make_unique<MockKeyHandlerDelegate>(2, &hook_history);
-  CallbackHandler& delegate2_handler = delegate2->callback_handler;
-  handler.AddDelegate(std::move(delegate2));
+  // Dispatch a key event.
+  handler.KeyboardHook(kVirtualKeyA, kScanCodeKeyA, WM_KEYDOWN, 'a', false,
+                       false, OnKeyEventResult);
 
-  /// Test 1: One delegate responds true, the other false
-
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().delegate_id, 1);
-  EXPECT_EQ(hook_history.front().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.front().was_down, false);
-  EXPECT_EQ(hook_history.back().delegate_id, 2);
-  EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.back().was_down, false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-
-  hook_history.back().callback(true);
-  EXPECT_EQ(redispatch_scancode, 0);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, 0);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  /// Test 2: All delegates respond false
-
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().delegate_id, 1);
-  EXPECT_EQ(hook_history.front().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.front().was_down, false);
-  EXPECT_EQ(hook_history.back().delegate_id, 2);
-  EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.back().was_down, false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, 0);
-
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode);
-
-  EXPECT_EQ(handler.HasRedispatched(), true);
-  EXPECT_EQ(handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false,
-                                 false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  hook_history.clear();
-  redispatch_scancode = 0;
-
-  /// Test 3: All delegates responds true
-
-  delegate_handled = handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN,
-                                          L'a', false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().delegate_id, 1);
-  EXPECT_EQ(hook_history.front().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.front().was_down, false);
-  EXPECT_EQ(hook_history.back().delegate_id, 2);
-  EXPECT_EQ(hook_history.back().scancode, kHandledScanCode);
-  EXPECT_EQ(hook_history.back().was_down, false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-
-  hook_history.back().callback(true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  // Only resolve after everyone has responded
-  EXPECT_EQ(handler.HasRedispatched(), false);
-
-  hook_history.front().callback(true);
-  EXPECT_EQ(redispatch_scancode, 0);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
+  std::map<uint64_t, uint64_t> pressed_state = handler.GetPressedState();
+  EXPECT_EQ(pressed_state.size(), 1);
+  EXPECT_EQ(pressed_state.at(kPhysicalKeyA), kLogicalKeyA);
 }
 
-// Regression test for a crash in an earlier implementation.
-//
-// In real life, the framework responds slowly. The next real event might
-// arrive earlier than the framework response, and if the 2nd event is identical
-// to the one waiting for response, an earlier implementation will crash upon
-// the response.
-TEST(KeyboardKeyHandlerTest, WithSlowFrameworkResponse) {
-  std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
+TEST(KeyboardKeyHandlerTest, KeyboardChannelGetPressedState) {
+  TestKeystate key_state;
+  TestBinaryMessenger messenger;
+  KeyboardKeyHandler handler(&messenger);
 
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  bool delegate_handled = false;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
+  std::unique_ptr<KeyboardKeyEmbedderHandler> embedder_handler =
+      std::make_unique<KeyboardKeyEmbedderHandler>(
+          [](const FlutterKeyEvent& event, FlutterKeyEventCallback callback,
+             void* user_data) {},
+          key_state.Getter(), DefaultMapVkToScan);
+  handler.AddDelegate(std::move(embedder_handler));
+  handler.InitKeyboardChannel();
 
-  auto delegate1 = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
-  CallbackHandler& delegate1_handler = delegate1->callback_handler;
-  handler.AddDelegate(std::move(delegate1));
+  // Dispatch a key event.
+  handler.KeyboardHook(kVirtualKeyA, kScanCodeKeyA, WM_KEYDOWN, 'a', false,
+                       false, OnKeyEventResult);
 
-  // The first native event.
-  EXPECT_EQ(
-      handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, true),
-      true);
+  bool success = false;
 
-  // The second identical native event, received between the first and its
-  // framework response.
-  EXPECT_EQ(
-      handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false, true),
-      true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
+  MethodResultFunctions<> result_handler(
+      [&success](const EncodableValue* result) {
+        success = true;
+        auto& map = std::get<EncodableMap>(*result);
+        EXPECT_EQ(map.size(), 1);
+        EncodableValue physical_value(static_cast<long long>(kPhysicalKeyA));
+        EncodableValue logical_value(static_cast<long long>(kLogicalKeyA));
+        EXPECT_EQ(map.at(physical_value), logical_value);
+      },
+      nullptr, nullptr);
 
-  EXPECT_EQ(handler.HasRedispatched(), false);
-
-  // The first response.
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode);
-  EXPECT_EQ(handler.HasRedispatched(), true);
-
-  // Redispatch the first event.
-  EXPECT_EQ(handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false,
-                                 false),
-            false);
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-
-  // The second response.
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kHandledScanCode);
-  EXPECT_EQ(handler.HasRedispatched(), true);
-
-  // Redispatch the second event.
-  EXPECT_EQ(handler.KeyboardHook(64, kHandledScanCode, WM_KEYDOWN, L'a', false,
-                                 false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-}
-
-// A key down event for shift right must not be redispatched even if
-// the framework returns unhandled.
-//
-// The reason for this test is documented in |IsKeyDownShiftRight|.
-TEST(KeyboardKeyHandlerTest, NeverRedispatchShiftRightKeyDown) {
-  std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
-
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  bool delegate_handled = false;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
-
-  auto delegate = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
-  delegate->callback_handler = respond_false;
-  handler.AddDelegate(std::move(delegate));
-
-  // Press ShiftRight and the delegate responds false.
-
-  delegate_handled = handler.KeyboardHook(VK_RSHIFT, kScanCodeShiftRight,
-                                          WM_KEYDOWN, 0, false, false);
-  EXPECT_EQ(delegate_handled, true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 1);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-}
-
-TEST(KeyboardKeyHandlerTest, AltGr) {
-  std::list<MockKeyHandlerDelegate::KeyboardHookCall> hook_history;
-
-  // Capture the scancode of the last redispatched event
-  int redispatch_scancode = 0;
-  TestKeyboardKeyHandler handler([&redispatch_scancode](UINT cInputs,
-                                                        LPINPUT pInputs,
-                                                        int cbSize) -> UINT {
-    EXPECT_TRUE(cbSize > 0);
-    redispatch_scancode = pInputs->ki.wScan;
-    return 1;
-  });
-
-  auto delegate = std::make_unique<MockKeyHandlerDelegate>(1, &hook_history);
-  delegate->callback_handler = dont_respond;
-  handler.AddDelegate(std::move(delegate));
-
-  // Sequence 1: Tap AltGr.
-
-  // The key down event causes a ControlLeft down and a AltRight (extended
-  // AltLeft) down.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            true);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.front().was_down, false);
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.back().was_down, false);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            false);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  // The key up event only causes a AltRight (extended AltLeft) up.
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      true);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.front().was_down, true);
-
-  // A ControlLeft key up is synthesized.
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            true);
-
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.back().was_down, true);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            false);
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  // Sequence 2: Tap CtrlLeft and AltGr.
-  // This also tests tapping AltGr twice in a row when combined with sequence
-  // 1 since "tapping CtrlLeft and AltGr" only sends an extra CtrlLeft key up
-  // than "tapping AltGr".
-
-  // Key down ControlLeft.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.front().was_down, false);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  hook_history.clear();
-  redispatch_scancode = 0;
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            false);
-
-  // Key down AltRight.
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.front().was_down, false);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-  hook_history.clear();
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            false);
-
-  redispatch_scancode = 0;
-
-  // Key up AltRight.
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      true);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.front().was_down, true);
-
-  // A ControlLeft key up is synthesized.
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            true);
-
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.back().was_down, true);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            false);
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      false);
-
-  hook_history.clear();
-  redispatch_scancode = 0;
-
-  // Key up ControlLeft should be dispatched to delegates, but will be properly
-  // handled by delegates' logic.
-
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.front().was_down, true);
-
-  hook_history.front().callback(true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  hook_history.clear();
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  // Sequence 3: Hold AltGr for repeated events.
-  // Every AltGr key repeat event is also preceded by a ControlLeft down
-  // (repeat).
-
-  // Key down AltRight.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            true);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.front().was_down, false);
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.back().was_down, false);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            false);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  // Another key down AltRight.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, true),
-            true);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, true),
-            true);
-  EXPECT_EQ(redispatch_scancode, 0);
-  EXPECT_EQ(hook_history.size(), 2);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.front().was_down, true);
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.back().was_down, true);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYDOWN,
-                                 0, false, false),
-            false);
-  EXPECT_EQ(handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYDOWN, 0,
-                                 true, false),
-            false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
-
-  // Key up AltRight.
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      true);
-  EXPECT_EQ(hook_history.size(), 1);
-  EXPECT_EQ(hook_history.front().scancode, kScanCodeAltLeft);
-  EXPECT_EQ(hook_history.front().was_down, true);
-
-  // A ControlLeft key up is synthesized.
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            true);
-
-  EXPECT_EQ(hook_history.back().scancode, kScanCodeControlLeft);
-  EXPECT_EQ(hook_history.back().was_down, true);
-
-  hook_history.front().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeAltLeft);
-  hook_history.back().callback(false);
-  EXPECT_EQ(redispatch_scancode, kScanCodeControlLeft);
-
-  // Resolve redispatches.
-  EXPECT_EQ(handler.KeyboardHook(VK_LCONTROL, kScanCodeControlLeft, WM_KEYUP, 0,
-                                 false, true),
-            false);
-  EXPECT_EQ(
-      handler.KeyboardHook(VK_RMENU, kScanCodeAltLeft, WM_KEYUP, 0, true, true),
-      false);
-
-  EXPECT_EQ(handler.HasRedispatched(), false);
-  redispatch_scancode = 0;
-  hook_history.clear();
+  SimulateKeyboardMessage(&messenger, kGetKeyboardStateMethod, nullptr,
+                          &result_handler);
+  EXPECT_TRUE(success);
 }
 
 }  // namespace testing

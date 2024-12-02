@@ -14,8 +14,7 @@
 #include "flutter/runtime/dart_vm.h"
 #include "flutter/runtime/dart_vm_lifecycle.h"
 
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
 
 class AutoIsolateShutdown {
  public:
@@ -28,7 +27,8 @@ class AutoIsolateShutdown {
 
   bool IsValid() const { return isolate_ != nullptr && runner_; }
 
-  [[nodiscard]] bool RunInIsolateScope(std::function<bool(void)> closure);
+  [[nodiscard]] bool RunInIsolateScope(
+      const std::function<bool(void)>& closure);
 
   void Shutdown();
 
@@ -53,7 +53,7 @@ void RunDartCodeInIsolate(
     const std::vector<std::string>& args,
     const std::string& fixtures_path,
     fml::WeakPtr<IOManager> io_manager = {},
-    std::shared_ptr<VolatilePathTracker> volatile_path_tracker = nullptr);
+    std::unique_ptr<PlatformConfiguration> platform_configuration = nullptr);
 
 std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolate(
     DartVMRef& vm_ref,
@@ -63,9 +63,8 @@ std::unique_ptr<AutoIsolateShutdown> RunDartCodeInIsolate(
     const std::vector<std::string>& args,
     const std::string& fixtures_path,
     fml::WeakPtr<IOManager> io_manager = {},
-    std::shared_ptr<VolatilePathTracker> volatile_path_tracker = nullptr);
+    std::unique_ptr<PlatformConfiguration> platform_configuration = nullptr);
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing
 
 #endif  // FLUTTER_TESTING_DART_ISOLATE_RUNNER_H_

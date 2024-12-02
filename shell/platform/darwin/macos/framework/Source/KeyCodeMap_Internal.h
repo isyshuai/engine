@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_
+
 #import <Cocoa/Cocoa.h>
 #include <cinttypes>
+#include <vector>
+
+namespace flutter {
 
 /**
  * Maps macOS-specific key code values representing |PhysicalKeyboardKey|.
@@ -20,7 +26,7 @@ extern const NSDictionary* keyCodeToPhysicalKey;
  */
 extern const NSDictionary* keyCodeToLogicalKey;
 
-// Several mask constants. See KeyCodeMap.mm for their descriptions.
+// Several mask constants. See KeyCodeMap.g.mm for their descriptions.
 
 /**
  * Mask for the 32-bit value portion of the key code.
@@ -80,3 +86,29 @@ typedef enum {
   kModifierFlagAltRight = 0x40,
   kModifierFlagControlRight = 0x200,
 } ModifierFlag;
+
+/**
+ * A character that Flutter wants to derive layout for, and guides on how to
+ * derive it.
+ */
+typedef struct {
+  // The key code for a key that prints `keyChar` in the US keyboard layout.
+  uint16_t keyCode;
+
+  // The printable string to derive logical key for.
+  uint64_t keyChar;
+
+  // If the goal is mandatory, the keyboard manager will make sure to find a
+  // logical key for this character, falling back to the US keyboard layout.
+  bool mandatory;
+} LayoutGoal;
+
+/**
+ * All keys that Flutter wants to derive layout for, and guides on how to derive
+ * them.
+ */
+extern const std::vector<LayoutGoal> kLayoutGoals;
+
+}  // namespace flutter
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_KEYCODEMAP_INTERNAL_H_

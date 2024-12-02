@@ -12,9 +12,10 @@
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterFakeKeyEvents.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/KeyCodeMap_Internal.h"
 #include "flutter/shell/platform/embedder/embedder.h"
-#include "flutter/shell/platform/embedder/test_utils/key_codes.h"
+#include "flutter/shell/platform/embedder/test_utils/key_codes.g.h"
 
 using namespace flutter::testing::keycodes;
+using namespace flutter::testing;
 
 FLUTTER_ASSERT_ARC;
 
@@ -26,24 +27,19 @@ FLUTTER_ASSERT_ARC;
 @interface TestKeyEvent : NSObject
 @property(nonatomic) FlutterKeyEvent* data;
 @property(nonatomic) FlutterKeyEventCallback callback;
-@property(nonatomic) _VoidPtr userData;
-- (nonnull instancetype)initWithEvent:(const FlutterKeyEvent*)event
-                             callback:(nullable FlutterKeyEventCallback)callback
-                             userData:(nullable _VoidPtr)userData;
-- (BOOL)hasCallback;
-- (void)respond:(BOOL)handled;
+@property(nonatomic, nullable) void* userData;
 @end
 
 @implementation TestKeyEvent
 - (instancetype)initWithEvent:(const FlutterKeyEvent*)event
                      callback:(nullable FlutterKeyEventCallback)callback
-                     userData:(nullable _VoidPtr)userData {
+                     userData:(nullable void*)userData {
   self = [super init];
   _data = new FlutterKeyEvent(*event);
   if (event->character != nullptr) {
     size_t len = strlen(event->character);
     char* character = new char[len + 1];
-    strcpy(character, event->character);
+    strlcpy(character, event->character, len + 1);
     _data->character = character;
   }
   _callback = callback;
@@ -63,8 +59,9 @@ FLUTTER_ASSERT_ARC;
 }
 
 - (void)dealloc {
-  if (_data->character != nullptr)
+  if (_data->character != nullptr) {
     delete[] _data->character;
+  }
   delete _data;
 }
 @end
@@ -74,6 +71,8 @@ API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeUndefined = (UIKeyboardHIDUsage)0x03;
 API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeKeyA = (UIKeyboardHIDUsage)0x04;
+API_AVAILABLE(ios(13.4))
+constexpr UIKeyboardHIDUsage kKeyCodePeriod = (UIKeyboardHIDUsage)0x37;
 API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeKeyW = (UIKeyboardHIDUsage)0x1a;
 API_AVAILABLE(ios(13.4))
@@ -86,6 +85,8 @@ API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeCapsLock = (UIKeyboardHIDUsage)0x39;
 API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeF1 = (UIKeyboardHIDUsage)0x3a;
+API_AVAILABLE(ios(13.4))
+constexpr UIKeyboardHIDUsage kKeyCodeCommandLeft = (UIKeyboardHIDUsage)0xe3;
 API_AVAILABLE(ios(13.4))
 constexpr UIKeyboardHIDUsage kKeyCodeAltRight = (UIKeyboardHIDUsage)0xe6;
 API_AVAILABLE(ios(13.4))
@@ -106,6 +107,11 @@ typedef void (^ResponseCallback)(bool handled);
 @implementation FlutterEmbedderKeyResponderTest
 
 - (void)setUp {
+  // All of these tests were designed to run on iOS 13.4 or later.
+  if (@available(iOS 13.4, *)) {
+  } else {
+    XCTSkip(@"Required API not present for test.");
+  }
 }
 
 - (void)tearDown {
@@ -121,7 +127,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -135,7 +141,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->timestamp, 123000000.0f);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
@@ -157,7 +165,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->timestamp, 123000000.0f);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
@@ -179,7 +189,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -195,7 +205,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kKeyCodeEject | kIosPlane);
   XCTAssertEqual(event->logical, kKeyCodeEject | kIosPlane);
   XCTAssertEqual(event->character, nullptr);
@@ -216,7 +228,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kKeyCodeEject | kIosPlane);
   XCTAssertEqual(event->logical, kKeyCodeEject | kIosPlane);
   XCTAssertEqual(event->character, nullptr);
@@ -236,7 +250,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -250,7 +264,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalAltRight);
   XCTAssertEqual(event->logical, kLogicalAltRight);
   XCTAssertEqual(event->character, nullptr);
@@ -265,7 +281,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyW);
   XCTAssertEqual(event->logical, kLogicalKeyW);
   XCTAssertStrEqual(event->character, "∑");
@@ -281,7 +299,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalAltRight);
   XCTAssertEqual(event->logical, kLogicalAltRight);
   XCTAssertEqual(event->character, nullptr);
@@ -300,7 +320,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyW);
   XCTAssertEqual(event->logical, kLogicalKeyW);
   XCTAssertEqual(event->character, nullptr);
@@ -316,7 +338,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "å");
@@ -330,7 +354,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -344,7 +368,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "a");
@@ -363,6 +389,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->physical, 0ull);
   XCTAssertEqual(event->logical, 0ull);
   XCTAssertEqual(event->synthesized, false);
@@ -379,7 +406,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertEqual(event->character, nullptr);
@@ -398,7 +427,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -412,6 +441,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->physical, 0ull);
   XCTAssertEqual(event->logical, 0ull);
   XCTAssertEqual(event->synthesized, false);
@@ -431,7 +461,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -444,7 +474,9 @@ typedef void (^ResponseCallback)(bool handled);
   XCTAssertEqual([events count], 1u);
 
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->timestamp, 123000000.0f);
   XCTAssertEqual(event->physical, kPhysicalShiftRight);
   XCTAssertEqual(event->logical, kLogicalShiftRight);
@@ -460,7 +492,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "A");
@@ -475,7 +509,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftRight);
   XCTAssertEqual(event->logical, kLogicalShiftRight);
   XCTAssertEqual(event->character, nullptr);
@@ -490,7 +526,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertEqual(event->character, nullptr);
@@ -515,7 +553,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -531,7 +569,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalNumpad1);
   XCTAssertEqual(event->logical, kLogicalNumpad1);
   XCTAssertStrEqual(event->character, "1");
@@ -547,7 +587,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyUndefined);
   XCTAssertEqual(event->logical, kLogicalKeyUndefined);
   XCTAssertEqual(event->character, nullptr);
@@ -563,7 +605,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalF1);
   XCTAssertEqual(event->logical, kLogicalF1);
   XCTAssertEqual(event->character, nullptr);
@@ -579,7 +623,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "a");
@@ -595,7 +641,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftLeft);
   XCTAssertEqual(event->logical, kLogicalShiftLeft);
   XCTAssertEqual(event->character, nullptr);
@@ -613,14 +661,18 @@ typedef void (^ResponseCallback)(bool handled);
   // Because the OS no longer provides the 0x20000 (kModifierFlagShiftAny), we
   // have to simulate a keyup.
   event = [events firstObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftLeft);
   XCTAssertEqual(event->logical, kLogicalShiftLeft);
   XCTAssertEqual(event->character, nullptr);
   XCTAssertEqual(event->synthesized, true);
 
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalNumpad1);
   XCTAssertEqual(event->logical, kLogicalNumpad1);
   XCTAssertEqual(event->character, nullptr);
@@ -636,7 +688,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalF1);
   XCTAssertEqual(event->logical, kLogicalF1);
   XCTAssertEqual(event->character, nullptr);
@@ -652,7 +706,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyUndefined);
   XCTAssertEqual(event->logical, kLogicalKeyUndefined);
   XCTAssertEqual(event->synthesized, false);
@@ -667,7 +723,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertEqual(event->character, nullptr);
@@ -683,6 +741,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->physical, 0ull);
   XCTAssertEqual(event->logical, 0ull);
   XCTAssertEqual(event->synthesized, false);
@@ -698,7 +757,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -710,7 +769,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftLeft);
   XCTAssertEqual(event->logical, kLogicalShiftLeft);
   XCTAssertEqual(event->character, nullptr);
@@ -725,7 +786,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftRight);
   XCTAssertEqual(event->logical, kLogicalShiftRight);
   XCTAssertEqual(event->character, nullptr);
@@ -740,7 +803,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftLeft);
   XCTAssertEqual(event->logical, kLogicalShiftLeft);
   XCTAssertEqual(event->character, nullptr);
@@ -755,7 +820,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalShiftRight);
   XCTAssertEqual(event->logical, kLogicalShiftRight);
   XCTAssertEqual(event->character, nullptr);
@@ -776,7 +843,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -789,7 +856,9 @@ typedef void (^ResponseCallback)(bool handled);
   XCTAssertEqual([events count], 3u);
 
   event = events[0].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -797,7 +866,9 @@ typedef void (^ResponseCallback)(bool handled);
   XCTAssertFalse([events[0] hasCallback]);
 
   event = events[1].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -805,7 +876,9 @@ typedef void (^ResponseCallback)(bool handled);
   XCTAssertFalse([events[1] hasCallback]);
 
   event = events[2].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "A");
@@ -823,7 +896,9 @@ typedef void (^ResponseCallback)(bool handled);
                 callback:keyEventCallback];
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertEqual(event->synthesized, false);
@@ -838,7 +913,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events firstObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -857,7 +934,9 @@ typedef void (^ResponseCallback)(bool handled);
 
   XCTAssertEqual([events count], 1u);
   event = [events firstObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -874,7 +953,9 @@ typedef void (^ResponseCallback)(bool handled);
   // consistent, and should be off.
   XCTAssertEqual([events count], 1u);
   event = [events lastObject].data;
+  XCTAssertNotEqual(event, nullptr);
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "a");
@@ -893,7 +974,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
       initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
-                          _Nullable _VoidPtr user_data) {
+                          void* _Nullable user_data) {
         [events addObject:[[TestKeyEvent alloc] initWithEvent:&event
                                                      callback:callback
                                                      userData:user_data]];
@@ -907,6 +988,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   event = events[0].data;
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -915,6 +997,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   event = events[1].data;
   XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalCapsLock);
   XCTAssertEqual(event->logical, kLogicalCapsLock);
   XCTAssertEqual(event->character, nullptr);
@@ -923,6 +1006,7 @@ typedef void (^ResponseCallback)(bool handled);
 
   event = events[2].data;
   XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
   XCTAssertEqual(event->physical, kPhysicalKeyA);
   XCTAssertEqual(event->logical, kLogicalKeyA);
   XCTAssertStrEqual(event->character, "A");
@@ -933,6 +1017,75 @@ typedef void (^ResponseCallback)(bool handled);
   [[events lastObject] respond:TRUE];
   XCTAssertEqual(last_handled, TRUE);
 
+  [events removeAllObjects];
+}
+
+// Press Cmd-. should correctly result in an Escape event.
+- (void)testCommandPeriodKey API_AVAILABLE(ios(13.4)) {
+  __block NSMutableArray<TestKeyEvent*>* events = [[NSMutableArray<TestKeyEvent*> alloc] init];
+  id keyEventCallback = ^(BOOL handled) {
+  };
+  FlutterKeyEvent* event;
+
+  FlutterEmbedderKeyResponder* responder = [[FlutterEmbedderKeyResponder alloc]
+      initWithSendEvent:^(const FlutterKeyEvent& event, _Nullable FlutterKeyEventCallback callback,
+                          void* _Nullable user_data) {
+        [events addObject:[[TestKeyEvent alloc] initWithEvent:&event callback:nil userData:nil]];
+        callback(true, user_data);
+      }];
+
+  // MetaLeft down.
+  [responder handlePress:keyDownEvent(kKeyCodeCommandLeft, kModifierFlagMetaAny, 123.0f, "", "")
+                callback:keyEventCallback];
+  XCTAssertEqual([events count], 1u);
+  event = events[0].data;
+  XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
+  XCTAssertEqual(event->physical, kPhysicalMetaLeft);
+  XCTAssertEqual(event->logical, kLogicalMetaLeft);
+  XCTAssertEqual(event->character, nullptr);
+  XCTAssertEqual(event->synthesized, false);
+  [events removeAllObjects];
+
+  // Period down, which is logically Escape.
+  [responder handlePress:keyDownEvent(kKeyCodePeriod, kModifierFlagMetaAny, 123.0f,
+                                      "UIKeyInputEscape", "UIKeyInputEscape")
+                callback:keyEventCallback];
+  XCTAssertEqual([events count], 1u);
+  event = events[0].data;
+  XCTAssertEqual(event->type, kFlutterKeyEventTypeDown);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
+  XCTAssertEqual(event->physical, kPhysicalPeriod);
+  XCTAssertEqual(event->logical, kLogicalEscape);
+  XCTAssertEqual(event->character, nullptr);
+  XCTAssertEqual(event->synthesized, false);
+  [events removeAllObjects];
+
+  // Period up, which unconventionally has characters.
+  [responder handlePress:keyUpEvent(kKeyCodePeriod, kModifierFlagMetaAny, 123.0f,
+                                    "UIKeyInputEscape", "UIKeyInputEscape")
+                callback:keyEventCallback];
+  XCTAssertEqual([events count], 1u);
+  event = events[0].data;
+  XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
+  XCTAssertEqual(event->physical, kPhysicalPeriod);
+  XCTAssertEqual(event->logical, kLogicalEscape);
+  XCTAssertEqual(event->character, nullptr);
+  XCTAssertEqual(event->synthesized, false);
+  [events removeAllObjects];
+
+  // MetaLeft up.
+  [responder handlePress:keyUpEvent(kKeyCodeCommandLeft, kModifierFlagMetaAny, 123.0f, "", "")
+                callback:keyEventCallback];
+  XCTAssertEqual([events count], 1u);
+  event = events[0].data;
+  XCTAssertEqual(event->type, kFlutterKeyEventTypeUp);
+  XCTAssertEqual(event->device_type, kFlutterKeyEventDeviceTypeKeyboard);
+  XCTAssertEqual(event->physical, kPhysicalMetaLeft);
+  XCTAssertEqual(event->logical, kLogicalMetaLeft);
+  XCTAssertEqual(event->character, nullptr);
+  XCTAssertEqual(event->synthesized, false);
   [events removeAllObjects];
 }
 

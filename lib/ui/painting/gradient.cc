@@ -4,6 +4,7 @@
 
 #include "flutter/lib/ui/painting/gradient.h"
 
+#include "flutter/lib/ui/floating_point.h"
 #include "third_party/tonic/converter/dart_converter.h"
 #include "third_party/tonic/dart_args.h"
 #include "third_party/tonic/dart_binding_macros.h"
@@ -14,106 +15,123 @@ namespace flutter {
 typedef CanvasGradient
     Gradient;  // Because the C++ name doesn't match the Dart name.
 
-static void Gradient_constructor(Dart_NativeArguments args) {
-  UIDartState::ThrowIfUIOperationsProhibited();
-  DartCallConstructor(&CanvasGradient::Create, args);
-}
-
 IMPLEMENT_WRAPPERTYPEINFO(ui, Gradient);
 
-#define FOR_EACH_BINDING(V) \
-  V(Gradient, initLinear)   \
-  V(Gradient, initRadial)   \
-  V(Gradient, initSweep)    \
-  V(Gradient, initTwoPointConical)
-
-FOR_EACH_BINDING(DART_NATIVE_CALLBACK)
-
-void CanvasGradient::RegisterNatives(tonic::DartLibraryNatives* natives) {
-  natives->Register({{"Gradient_constructor", Gradient_constructor, 1, true},
-                     FOR_EACH_BINDING(DART_REGISTER_NATIVE)});
-}
-
-fml::RefPtr<CanvasGradient> CanvasGradient::Create() {
-  return fml::MakeRefCounted<CanvasGradient>();
+void CanvasGradient::Create(Dart_Handle wrapper) {
+  UIDartState::ThrowIfUIOperationsProhibited();
+  auto res = fml::MakeRefCounted<CanvasGradient>();
+  res->AssociateWithDartWrapper(wrapper);
 }
 
 void CanvasGradient::initLinear(const tonic::Float32List& end_points,
-                                const tonic::Int32List& colors,
+                                const tonic::Float32List& colors,
                                 const tonic::Float32List& color_stops,
-                                SkTileMode tile_mode,
+                                DlTileMode tile_mode,
                                 const tonic::Float64List& matrix4) {
   FML_DCHECK(end_points.num_elements() == 4);
-  FML_DCHECK(colors.num_elements() == color_stops.num_elements() ||
+  FML_DCHECK(colors.num_elements() == (color_stops.num_elements() * 4) ||
              color_stops.data() == nullptr);
+  int num_colors = colors.num_elements() / 4;
 
-  static_assert(sizeof(SkPoint) == sizeof(float) * 2,
-                "SkPoint doesn't use floats.");
-  static_assert(sizeof(SkColor) == sizeof(int32_t),
-                "SkColor doesn't use int32_t.");
+  static_assert(sizeof(DlPoint) == sizeof(float) * 2,
+                "DlPoint doesn't use floats.");
 
-  SkMatrix sk_matrix;
+  DlMatrix dl_matrix;
   bool has_matrix = matrix4.data() != nullptr;
   if (has_matrix) {
-    sk_matrix = ToSkMatrix(matrix4);
+    dl_matrix = ToDlMatrix(matrix4);
   }
 
-  sk_shader_ = UIDartState::CreateGPUObject(SkGradientShader::MakeLinear(
-      reinterpret_cast<const SkPoint*>(end_points.data()),
-      reinterpret_cast<const SkColor*>(colors.data()), color_stops.data(),
-      colors.num_elements(), tile_mode, 0, has_matrix ? &sk_matrix : nullptr));
+  DlPoint p0 = DlPoint(end_points[0], end_points[1]);
+  DlPoint p1 = DlPoint(end_points[2], end_points[3]);
+  std::vector<DlColor> dl_colors;
+  dl_colors.reserve(num_colors);
+  for (int i = 0; i < colors.num_elements(); i += 4) {
+    DlScalar a = colors[i + 0];
+    DlScalar r = colors[i + 1];
+    DlScalar g = colors[i + 2];
+    DlScalar b = colors[i + 3];
+    dl_colors.emplace_back(DlColor(a, r, g, b, DlColorSpace::kExtendedSRGB));
+  }
+
+  dl_shader_ = DlColorSource::MakeLinear(p0, p1, num_colors, dl_colors.data(),
+                                         color_stops.data(), tile_mode,
+                                         has_matrix ? &dl_matrix : nullptr);
+  // Just a sanity check, all gradient shaders should be thread-safe
+  FML_DCHECK(dl_shader_->isUIThreadSafe());
 }
 
 void CanvasGradient::initRadial(double center_x,
                                 double center_y,
                                 double radius,
-                                const tonic::Int32List& colors,
+                                const tonic::Float32List& colors,
                                 const tonic::Float32List& color_stops,
-                                SkTileMode tile_mode,
+                                DlTileMode tile_mode,
                                 const tonic::Float64List& matrix4) {
-  FML_DCHECK(colors.num_elements() == color_stops.num_elements() ||
+  FML_DCHECK(colors.num_elements() == (color_stops.num_elements() * 4) ||
              color_stops.data() == nullptr);
+  int num_colors = colors.num_elements() / 4;
 
-  static_assert(sizeof(SkColor) == sizeof(int32_t),
-                "SkColor doesn't use int32_t.");
-
-  SkMatrix sk_matrix;
+  DlMatrix dl_matrix;
   bool has_matrix = matrix4.data() != nullptr;
   if (has_matrix) {
-    sk_matrix = ToSkMatrix(matrix4);
+    dl_matrix = ToDlMatrix(matrix4);
   }
 
-  sk_shader_ = UIDartState::CreateGPUObject(SkGradientShader::MakeRadial(
-      SkPoint::Make(center_x, center_y), radius,
-      reinterpret_cast<const SkColor*>(colors.data()), color_stops.data(),
-      colors.num_elements(), tile_mode, 0, has_matrix ? &sk_matrix : nullptr));
+  std::vector<DlColor> dl_colors;
+  dl_colors.reserve(num_colors);
+  for (int i = 0; i < colors.num_elements(); i += 4) {
+    DlScalar a = colors[i + 0];
+    DlScalar r = colors[i + 1];
+    DlScalar g = colors[i + 2];
+    DlScalar b = colors[i + 3];
+    dl_colors.emplace_back(DlColor(a, r, g, b, DlColorSpace::kExtendedSRGB));
+  }
+
+  dl_shader_ = DlColorSource::MakeRadial(
+      DlPoint(SafeNarrow(center_x), SafeNarrow(center_y)), SafeNarrow(radius),
+      num_colors, dl_colors.data(), color_stops.data(), tile_mode,
+      has_matrix ? &dl_matrix : nullptr);
+  // Just a sanity check, all gradient shaders should be thread-safe
+  FML_DCHECK(dl_shader_->isUIThreadSafe());
 }
 
 void CanvasGradient::initSweep(double center_x,
                                double center_y,
-                               const tonic::Int32List& colors,
+                               const tonic::Float32List& colors,
                                const tonic::Float32List& color_stops,
-                               SkTileMode tile_mode,
+                               DlTileMode tile_mode,
                                double start_angle,
                                double end_angle,
                                const tonic::Float64List& matrix4) {
-  FML_DCHECK(colors.num_elements() == color_stops.num_elements() ||
+  FML_DCHECK(colors.num_elements() == (color_stops.num_elements() * 4) ||
              color_stops.data() == nullptr);
+  int num_colors = colors.num_elements() / 4;
 
-  static_assert(sizeof(SkColor) == sizeof(int32_t),
-                "SkColor doesn't use int32_t.");
-
-  SkMatrix sk_matrix;
+  DlMatrix dl_matrix;
   bool has_matrix = matrix4.data() != nullptr;
   if (has_matrix) {
-    sk_matrix = ToSkMatrix(matrix4);
+    dl_matrix = ToDlMatrix(matrix4);
   }
 
-  sk_shader_ = UIDartState::CreateGPUObject(SkGradientShader::MakeSweep(
-      center_x, center_y, reinterpret_cast<const SkColor*>(colors.data()),
-      color_stops.data(), colors.num_elements(), tile_mode,
-      start_angle * 180.0 / M_PI, end_angle * 180.0 / M_PI, 0,
-      has_matrix ? &sk_matrix : nullptr));
+  std::vector<DlColor> dl_colors;
+  dl_colors.reserve(num_colors);
+  for (int i = 0; i < colors.num_elements(); i += 4) {
+    DlScalar a = colors[i + 0];
+    DlScalar r = colors[i + 1];
+    DlScalar g = colors[i + 2];
+    DlScalar b = colors[i + 3];
+    dl_colors.emplace_back(DlColor(a, r, g, b, DlColorSpace::kExtendedSRGB));
+  }
+
+  dl_shader_ = DlColorSource::MakeSweep(
+      DlPoint(SafeNarrow(center_x), SafeNarrow(center_y)),
+      SafeNarrow(start_angle) * 180.0f / static_cast<float>(M_PI),
+      SafeNarrow(end_angle) * 180.0f / static_cast<float>(M_PI), num_colors,
+      dl_colors.data(), color_stops.data(), tile_mode,
+      has_matrix ? &dl_matrix : nullptr);
+  // Just a sanity check, all gradient shaders should be thread-safe
+  FML_DCHECK(dl_shader_->isUIThreadSafe());
 }
 
 void CanvasGradient::initTwoPointConical(double start_x,
@@ -122,29 +140,37 @@ void CanvasGradient::initTwoPointConical(double start_x,
                                          double end_x,
                                          double end_y,
                                          double end_radius,
-                                         const tonic::Int32List& colors,
+                                         const tonic::Float32List& colors,
                                          const tonic::Float32List& color_stops,
-                                         SkTileMode tile_mode,
+                                         DlTileMode tile_mode,
                                          const tonic::Float64List& matrix4) {
-  FML_DCHECK(colors.num_elements() == color_stops.num_elements() ||
+  FML_DCHECK(colors.num_elements() == (color_stops.num_elements() * 4) ||
              color_stops.data() == nullptr);
+  int num_colors = colors.num_elements() / 4;
 
-  static_assert(sizeof(SkColor) == sizeof(int32_t),
-                "SkColor doesn't use int32_t.");
-
-  SkMatrix sk_matrix;
+  DlMatrix dl_matrix;
   bool has_matrix = matrix4.data() != nullptr;
   if (has_matrix) {
-    sk_matrix = ToSkMatrix(matrix4);
+    dl_matrix = ToDlMatrix(matrix4);
   }
 
-  sk_shader_ =
-      UIDartState::CreateGPUObject(SkGradientShader::MakeTwoPointConical(
-          SkPoint::Make(start_x, start_y), start_radius,
-          SkPoint::Make(end_x, end_y), end_radius,
-          reinterpret_cast<const SkColor*>(colors.data()), color_stops.data(),
-          colors.num_elements(), tile_mode, 0,
-          has_matrix ? &sk_matrix : nullptr));
+  std::vector<DlColor> dl_colors;
+  dl_colors.reserve(num_colors);
+  for (int i = 0; i < colors.num_elements(); i += 4) {
+    DlScalar a = colors[i + 0];
+    DlScalar r = colors[i + 1];
+    DlScalar g = colors[i + 2];
+    DlScalar b = colors[i + 3];
+    dl_colors.emplace_back(DlColor(a, r, g, b, DlColorSpace::kExtendedSRGB));
+  }
+
+  dl_shader_ = DlColorSource::MakeConical(
+      DlPoint(SafeNarrow(start_x), SafeNarrow(start_y)),
+      SafeNarrow(start_radius), DlPoint(SafeNarrow(end_x), SafeNarrow(end_y)),
+      SafeNarrow(end_radius), num_colors, dl_colors.data(), color_stops.data(),
+      tile_mode, has_matrix ? &dl_matrix : nullptr);
+  // Just a sanity check, all gradient shaders should be thread-safe
+  FML_DCHECK(dl_shader_->isUIThreadSafe());
 }
 
 CanvasGradient::CanvasGradient() = default;

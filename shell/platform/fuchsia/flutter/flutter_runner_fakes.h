@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_
-#define SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_
+#ifndef FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_
+#define FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_
 
 #include <fuchsia/accessibility/semantics/cpp/fidl.h>
 
@@ -78,6 +78,18 @@ class MockSemanticsManager
   int UpdateCount() const { return update_count_; }
   bool UpdateOverflowed() const { return update_overflowed_; }
 
+  bool ShouldHoldCommitResponse() const { return should_hold_commit_response_; }
+
+  void SetShouldHoldCommitResponse(bool value) {
+    should_hold_commit_response_ = value;
+  }
+
+  void InvokeCommitCallback() {
+    if (commit_callback_) {
+      commit_callback_();
+    }
+  }
+
   int CommitCount() const { return commit_count_; }
 
   const std::vector<fuchsia::accessibility::semantics::Node>& LastUpdatedNodes()
@@ -87,6 +99,11 @@ class MockSemanticsManager
 
   void CommitUpdates(CommitUpdatesCallback callback) override {
     commit_count_++;
+    if (should_hold_commit_response_) {
+      commit_callback_ = std::move(callback);
+      return;
+    }
+    callback();
   }
 
   void SendSemanticEvent(
@@ -112,10 +129,12 @@ class MockSemanticsManager
   int delete_count_;
   bool delete_overflowed_;
   std::vector<uint32_t> last_deleted_node_ids_;
+  bool should_hold_commit_response_ = false;
+  CommitUpdatesCallback commit_callback_;
   int commit_count_;
   std::vector<fuchsia::accessibility::semantics::SemanticEvent> last_events_;
 };
 
 }  // namespace flutter_runner_test
 
-#endif  // SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_
+#endif  // FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_FLUTTER_RUNNER_FAKES_H_

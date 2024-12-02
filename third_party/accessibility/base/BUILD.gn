@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//flutter/build/dart/dart.gni")
 import("//flutter/common/config.gni")
 
 source_set("base") {
@@ -35,24 +36,17 @@ source_set("base") {
       "win/scoped_safearray.h",
       "win/scoped_variant.cc",
       "win/scoped_variant.h",
-      "win/string_conversion.cc",
-      "win/string_conversion.h",
       "win/variant_util.h",
       "win/variant_vector.cc",
       "win/variant_vector.h",
     ]
     libs = [ "propsys.lib" ]
   }
-  if (is_mac) {
-    sources += [
-      "platform/darwin/scoped_nsobject.h",
-      "platform/darwin/scoped_nsobject.mm",
-    ]
-  }
 
   public_deps = [
+    "$dart_src/third_party/double-conversion/src:libdouble_conversion",
     "numerics",
+    "//flutter/fml:string_conversion",
     "//flutter/third_party/accessibility/ax_build",
-    "//third_party/dart/runtime/third_party/double-conversion/src:libdouble_conversion",
   ]
 }

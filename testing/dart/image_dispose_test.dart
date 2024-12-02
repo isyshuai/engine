@@ -6,18 +6,12 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'package:litetest/litetest.dart';
 import 'package:path/path.dart' as path;
+import 'package:test/test.dart';
 
 void main() {
-  bool assertsEnabled = false;
-  assert(() {
-    assertsEnabled = true;
-    return true;
-  }());
-
   test('Handles are distinct', () async {
-    final Uint8List bytes = await readFile('2x2.png');
+    final Uint8List bytes = await _readFile('2x2.png');
     final Codec codec = await instantiateImageCodec(bytes);
     final FrameInfo frame = await codec.getNextFrame();
 
@@ -36,7 +30,7 @@ void main() {
   });
 
   test('Canvas can paint image from handle and byte data from handle', () async {
-    final Uint8List bytes = await readFile('2x2.png');
+    final Uint8List bytes = await _readFile('2x2.png');
     final Codec codec = await instantiateImageCodec(bytes);
     final FrameInfo frame = await codec.getNextFrame();
 
@@ -66,33 +60,33 @@ void main() {
   });
 
   test('Records stack traces', () async {
-    final Uint8List bytes = await readFile('2x2.png');
+    final Uint8List bytes = await _readFile('2x2.png');
     final Codec codec = await instantiateImageCodec(bytes);
     final FrameInfo frame = await codec.getNextFrame();
 
     final Image handle1 = frame.image.clone();
     final Image handle2 = handle1.clone();
 
-    List<StackTrace> stackTraces = (frame.image.debugGetOpenHandleStackTraces())!;
+    List<StackTrace> stackTraces = frame.image.debugGetOpenHandleStackTraces()!;
     expect(stackTraces.length, 3);
     expect(stackTraces, equals(handle1.debugGetOpenHandleStackTraces()));
 
     handle1.dispose();
-    stackTraces = (frame.image.debugGetOpenHandleStackTraces())!;
+    stackTraces = frame.image.debugGetOpenHandleStackTraces()!;
     expect(stackTraces.length, 2);
     expect(stackTraces, equals(handle2.debugGetOpenHandleStackTraces()));
 
     handle2.dispose();
-    stackTraces = (frame.image.debugGetOpenHandleStackTraces())!;
+    stackTraces = frame.image.debugGetOpenHandleStackTraces()!;
     expect(stackTraces.length, 1);
     expect(stackTraces, equals(frame.image.debugGetOpenHandleStackTraces()));
 
     frame.image.dispose();
     expect(frame.image.debugGetOpenHandleStackTraces(), isEmpty);
-  }, skip: !assertsEnabled);
+  });
 
   test('Clones can be compared', () async {
-    final Uint8List bytes = await readFile('2x2.png');
+    final Uint8List bytes = await _readFile('2x2.png');
     final Codec codec = await instantiateImageCodec(bytes);
     final FrameInfo frame = await codec.getNextFrame();
 
@@ -114,39 +108,19 @@ void main() {
     expect(frame2.image.isCloneOf(frame.image), false);
   });
 
-  test('getNextFrame does not return a disposed image', () async {
-    final Uint8List bytes = await readFile('2x2.png');
-    final Codec codec = await instantiateImageCodec(bytes);
-    final FrameInfo frame = await codec.getNextFrame();
-
-    frame.image.dispose();
-
-    final FrameInfo frame2 = await codec.getNextFrame();
-    expect(frame2.image.clone()..dispose(), isNotNull);
-    frame2.image.dispose();
-  });
-
   test('debugDisposed works', () async {
-    final Uint8List bytes = await readFile('2x2.png');
+    final Uint8List bytes = await _readFile('2x2.png');
     final Codec codec = await instantiateImageCodec(bytes);
     final FrameInfo frame = await codec.getNextFrame();
 
-    if (assertsEnabled) {
-      expect(frame.image.debugDisposed, false);
-    } else {
-      expect(() => frame.image.debugDisposed, throwsStateError);
-    }
+    expect(frame.image.debugDisposed, false);
 
     frame.image.dispose();
-    if (assertsEnabled) {
-      expect(frame.image.debugDisposed, true);
-    } else {
-      expect(() => frame.image.debugDisposed, throwsStateError);
-    }
+    expect(frame.image.debugDisposed, true);
   });
 }
 
-Future<Uint8List> readFile(String fileName) async {
+Future<Uint8List> _readFile(String fileName) async {
   final File file = File(path.join(
     'flutter',
     'testing',

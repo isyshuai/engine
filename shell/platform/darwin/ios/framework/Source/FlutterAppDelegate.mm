@@ -11,6 +11,8 @@
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterEngine_Internal.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterPluginAppLifeCycleDelegate_internal.h"
 
+FLUTTER_ASSERT_ARC
+
 static NSString* const kUIBackgroundMode = @"UIBackgroundModes";
 static NSString* const kRemoteNotificationCapabitiliy = @"remote-notification";
 static NSString* const kBackgroundFetchCapatibility = @"fetch";
@@ -18,11 +20,10 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
 
 @interface FlutterAppDelegate ()
 @property(nonatomic, copy) FlutterViewController* (^rootFlutterViewControllerGetter)(void);
+@property(nonatomic, strong) FlutterPluginAppLifeCycleDelegate* lifeCycleDelegate;
 @end
 
-@implementation FlutterAppDelegate {
-  FlutterPluginAppLifeCycleDelegate* _lifeCycleDelegate;
-}
+@implementation FlutterAppDelegate
 
 - (instancetype)init {
   if (self = [super init]) {
@@ -31,21 +32,16 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
   return self;
 }
 
-- (void)dealloc {
-  [_lifeCycleDelegate release];
-  [_rootFlutterViewControllerGetter release];
-  [_window release];
-  [super dealloc];
-}
-
 - (BOOL)application:(UIApplication*)application
     willFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
-  return [_lifeCycleDelegate application:application willFinishLaunchingWithOptions:launchOptions];
+  return [self.lifeCycleDelegate application:application
+              willFinishLaunchingWithOptions:launchOptions];
 }
 
 - (BOOL)application:(UIApplication*)application
     didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
-  return [_lifeCycleDelegate application:application didFinishLaunchingWithOptions:launchOptions];
+  return [self.lifeCycleDelegate application:application
+               didFinishLaunchingWithOptions:launchOptions];
 }
 
 // Returns the key window's rootViewController, if it's a FlutterViewController.
@@ -85,20 +81,20 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 - (void)application:(UIApplication*)application
     didRegisterUserNotificationSettings:(UIUserNotificationSettings*)notificationSettings {
-  [_lifeCycleDelegate application:application
+  [self.lifeCycleDelegate application:application
       didRegisterUserNotificationSettings:notificationSettings];
 }
 #pragma GCC diagnostic pop
 
 - (void)application:(UIApplication*)application
     didRegisterForRemoteNotificationsWithDeviceToken:(NSData*)deviceToken {
-  [_lifeCycleDelegate application:application
+  [self.lifeCycleDelegate application:application
       didRegisterForRemoteNotificationsWithDeviceToken:deviceToken];
 }
 
 - (void)application:(UIApplication*)application
     didFailToRegisterForRemoteNotificationsWithError:(NSError*)error {
-  [_lifeCycleDelegate application:application
+  [self.lifeCycleDelegate application:application
       didFailToRegisterForRemoteNotificationsWithError:error];
 }
 
@@ -106,21 +102,18 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 - (void)application:(UIApplication*)application
     didReceiveLocalNotification:(UILocalNotification*)notification {
-  [_lifeCycleDelegate application:application didReceiveLocalNotification:notification];
+  [self.lifeCycleDelegate application:application didReceiveLocalNotification:notification];
 }
 #pragma GCC diagnostic pop
 
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
        willPresentNotification:(UNNotification*)notification
          withCompletionHandler:
-             (void (^)(UNNotificationPresentationOptions options))completionHandler
-    NS_AVAILABLE_IOS(10_0) {
-  if (@available(iOS 10.0, *)) {
-    if ([_lifeCycleDelegate respondsToSelector:_cmd]) {
-      [_lifeCycleDelegate userNotificationCenter:center
-                         willPresentNotification:notification
-                           withCompletionHandler:completionHandler];
-    }
+             (void (^)(UNNotificationPresentationOptions options))completionHandler {
+  if ([self.lifeCycleDelegate respondsToSelector:_cmd]) {
+    [self.lifeCycleDelegate userNotificationCenter:center
+                           willPresentNotification:notification
+                             withCompletionHandler:completionHandler];
   }
 }
 
@@ -129,106 +122,100 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
  */
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
     didReceiveNotificationResponse:(UNNotificationResponse*)response
-             withCompletionHandler:(void (^)(void))completionHandler NS_AVAILABLE_IOS(10_0) {
-  if (@available(iOS 10.0, *)) {
-    if ([_lifeCycleDelegate respondsToSelector:_cmd]) {
-      [_lifeCycleDelegate userNotificationCenter:center
-                  didReceiveNotificationResponse:response
-                           withCompletionHandler:completionHandler];
-    }
+             withCompletionHandler:(void (^)(void))completionHandler {
+  if ([self.lifeCycleDelegate respondsToSelector:_cmd]) {
+    [self.lifeCycleDelegate userNotificationCenter:center
+                    didReceiveNotificationResponse:response
+                             withCompletionHandler:completionHandler];
   }
 }
 
-- (BOOL)openURL:(NSURL*)url {
+- (BOOL)isFlutterDeepLinkingEnabled {
   NSNumber* isDeepLinkingEnabled =
       [[NSBundle mainBundle] objectForInfoDictionaryKey:@"FlutterDeepLinkingEnabled"];
-  if (!isDeepLinkingEnabled.boolValue) {
-    // Not set or NO.
-    return NO;
-  } else {
-    FlutterViewController* flutterViewController = [self rootFlutterViewController];
-    if (flutterViewController) {
-      [flutterViewController.engine
-          waitForFirstFrame:3.0
-                   callback:^(BOOL didTimeout) {
-                     if (didTimeout) {
-                       FML_LOG(ERROR)
-                           << "Timeout waiting for the first frame when launching an URL.";
-                     } else {
-                       NSString* fullRoute = url.path;
-                       if ([url.query length] != 0) {
-                         fullRoute = [NSString stringWithFormat:@"%@?%@", fullRoute, url.query];
-                       }
-                       if ([url.fragment length] != 0) {
-                         fullRoute = [NSString stringWithFormat:@"%@#%@", fullRoute, url.fragment];
-                       }
-                       [flutterViewController.engine.navigationChannel invokeMethod:@"pushRoute"
-                                                                          arguments:fullRoute];
-                     }
-                   }];
-      return YES;
-    } else {
-      FML_LOG(ERROR) << "Attempting to open an URL without a Flutter RootViewController.";
-      return NO;
-    }
-  }
+  // if not set, return YES
+  return isDeepLinkingEnabled ? [isDeepLinkingEnabled boolValue] : YES;
 }
 
+// This method is called when opening an URL with custom schemes.
 - (BOOL)application:(UIApplication*)application
             openURL:(NSURL*)url
             options:(NSDictionary<UIApplicationOpenURLOptionsKey, id>*)options {
-  if ([_lifeCycleDelegate application:application openURL:url options:options]) {
+  if ([self.lifeCycleDelegate application:application openURL:url options:options]) {
     return YES;
   }
-  return [self openURL:url];
+
+  // Relaying to the system here will case an infinite loop, so we don't do it here.
+  return [self handleOpenURL:url options:options relayToSystemIfUnhandled:NO];
+}
+
+// Helper function for opening an URL, either with a custom scheme or a http/https scheme.
+- (BOOL)handleOpenURL:(NSURL*)url
+                     options:(NSDictionary<UIApplicationOpenURLOptionsKey, id>*)options
+    relayToSystemIfUnhandled:(BOOL)throwBack {
+  if (![self isFlutterDeepLinkingEnabled]) {
+    return NO;
+  }
+
+  FlutterViewController* flutterViewController = [self rootFlutterViewController];
+  if (flutterViewController) {
+    [flutterViewController sendDeepLinkToFramework:url
+                                 completionHandler:^(BOOL success) {
+                                   if (!success && throwBack) {
+                                     // throw it back to iOS
+                                     [UIApplication.sharedApplication openURL:url];
+                                   }
+                                 }];
+  } else {
+    FML_LOG(ERROR) << "Attempting to open an URL without a Flutter RootViewController.";
+    return NO;
+  }
+  return YES;
 }
 
 - (BOOL)application:(UIApplication*)application handleOpenURL:(NSURL*)url {
-  return [_lifeCycleDelegate application:application handleOpenURL:url];
+  return [self.lifeCycleDelegate application:application handleOpenURL:url];
 }
 
 - (BOOL)application:(UIApplication*)application
               openURL:(NSURL*)url
     sourceApplication:(NSString*)sourceApplication
            annotation:(id)annotation {
-  return [_lifeCycleDelegate application:application
-                                 openURL:url
-                       sourceApplication:sourceApplication
-                              annotation:annotation];
+  return [self.lifeCycleDelegate application:application
+                                     openURL:url
+                           sourceApplication:sourceApplication
+                                  annotation:annotation];
 }
 
 - (void)application:(UIApplication*)application
     performActionForShortcutItem:(UIApplicationShortcutItem*)shortcutItem
-               completionHandler:(void (^)(BOOL succeeded))completionHandler NS_AVAILABLE_IOS(9_0) {
-  [_lifeCycleDelegate application:application
-      performActionForShortcutItem:shortcutItem
-                 completionHandler:completionHandler];
+               completionHandler:(void (^)(BOOL succeeded))completionHandler {
+  [self.lifeCycleDelegate application:application
+         performActionForShortcutItem:shortcutItem
+                    completionHandler:completionHandler];
 }
 
 - (void)application:(UIApplication*)application
     handleEventsForBackgroundURLSession:(nonnull NSString*)identifier
                       completionHandler:(nonnull void (^)())completionHandler {
-  [_lifeCycleDelegate application:application
+  [self.lifeCycleDelegate application:application
       handleEventsForBackgroundURLSession:identifier
                         completionHandler:completionHandler];
 }
 
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 120000
+// This method is called when opening an URL with a http/https scheme.
 - (BOOL)application:(UIApplication*)application
     continueUserActivity:(NSUserActivity*)userActivity
-      restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>>* __nullable
-                                       restorableObjects))restorationHandler {
-#else
-- (BOOL)application:(UIApplication*)application
-    continueUserActivity:(NSUserActivity*)userActivity
-      restorationHandler:(void (^)(NSArray* __nullable restorableObjects))restorationHandler {
-#endif
-  if ([_lifeCycleDelegate application:application
-                 continueUserActivity:userActivity
-                   restorationHandler:restorationHandler]) {
+      restorationHandler:
+          (void (^)(NSArray<id<UIUserActivityRestoring>>* __nullable restorableObjects))
+              restorationHandler {
+  if ([self.lifeCycleDelegate application:application
+                     continueUserActivity:userActivity
+                       restorationHandler:restorationHandler]) {
     return YES;
   }
-  return [self openURL:userActivity.webpageURL];
+
+  return [self handleOpenURL:userActivity.webpageURL options:@{} relayToSystemIfUnhandled:YES];
 }
 
 #pragma mark - FlutterPluginRegistry methods. All delegating to the rootViewController
@@ -260,30 +247,30 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
 #pragma mark - Selectors handling
 
 - (void)addApplicationLifeCycleDelegate:(NSObject<FlutterApplicationLifeCycleDelegate>*)delegate {
-  [_lifeCycleDelegate addDelegate:delegate];
+  [self.lifeCycleDelegate addDelegate:delegate];
 }
 
 #pragma mark - UIApplicationDelegate method dynamic implementation
 
 - (BOOL)respondsToSelector:(SEL)selector {
-  if ([_lifeCycleDelegate isSelectorAddedDynamically:selector]) {
+  if ([self.lifeCycleDelegate isSelectorAddedDynamically:selector]) {
     return [self delegateRespondsSelectorToPlugins:selector];
   }
   return [super respondsToSelector:selector];
 }
 
 - (BOOL)delegateRespondsSelectorToPlugins:(SEL)selector {
-  if ([_lifeCycleDelegate hasPluginThatRespondsToSelector:selector]) {
-    return [_lifeCycleDelegate respondsToSelector:selector];
+  if ([self.lifeCycleDelegate hasPluginThatRespondsToSelector:selector]) {
+    return [self.lifeCycleDelegate respondsToSelector:selector];
   } else {
     return NO;
   }
 }
 
 - (id)forwardingTargetForSelector:(SEL)aSelector {
-  if ([_lifeCycleDelegate isSelectorAddedDynamically:aSelector]) {
+  if ([self.lifeCycleDelegate isSelectorAddedDynamically:aSelector]) {
     [self logCapabilityConfigurationWarningIfNeeded:aSelector];
-    return _lifeCycleDelegate;
+    return self.lifeCycleDelegate;
   }
   return [super forwardingTargetForSelector:aSelector];
 }
@@ -295,7 +282,7 @@ static NSString* const kRestorationStateAppModificationKey = @"mod-date";
 - (void)logCapabilityConfigurationWarningIfNeeded:(SEL)selector {
   NSArray* backgroundModesArray =
       [[NSBundle mainBundle] objectForInfoDictionaryKey:kUIBackgroundMode];
-  NSSet* backgroundModesSet = [[[NSSet alloc] initWithArray:backgroundModesArray] autorelease];
+  NSSet* backgroundModesSet = [[NSSet alloc] initWithArray:backgroundModesArray];
   if (selector == @selector(application:didReceiveRemoteNotification:fetchCompletionHandler:)) {
     if (![backgroundModesSet containsObject:kRemoteNotificationCapabitiliy]) {
       NSLog(

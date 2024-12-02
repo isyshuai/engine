@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef COMMON_PLATFORM_VIEW_H_
-#define COMMON_PLATFORM_VIEW_H_
+#ifndef FLUTTER_SHELL_COMMON_PLATFORM_VIEW_H_
+#define FLUTTER_SHELL_COMMON_PLATFORM_VIEW_H_
 
 #include <functional>
 #include <memory>
@@ -20,13 +20,17 @@
 #include "flutter/lib/ui/window/key_data_packet.h"
 #include "flutter/lib/ui/window/platform_message.h"
 #include "flutter/lib/ui/window/pointer_data_packet.h"
-#include "flutter/lib/ui/window/pointer_data_packet_converter.h"
 #include "flutter/lib/ui/window/viewport_metrics.h"
 #include "flutter/shell/common/platform_message_handler.h"
 #include "flutter/shell/common/pointer_data_dispatcher.h"
 #include "flutter/shell/common/vsync_waiter.h"
-#include "third_party/skia/include/core/SkSize.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
+
+namespace impeller {
+
+class Context;
+
+}  // namespace impeller
 
 namespace flutter {
 
@@ -46,6 +50,8 @@ namespace flutter {
 ///
 class PlatformView {
  public:
+  using AddViewCallback = std::function<void(bool added)>;
+  using RemoveViewCallback = std::function<void(bool removed)>;
   //----------------------------------------------------------------------------
   /// @brief      Used to forward events from the platform view to interested
   ///             subsystems. This forwarding is done by the shell which sets
@@ -53,6 +59,8 @@ class PlatformView {
   ///
   class Delegate {
    public:
+    using AddViewCallback = PlatformView::AddViewCallback;
+    using RemoveViewCallback = PlatformView::RemoveViewCallback;
     using KeyDataResponse = std::function<void(bool)>;
     //--------------------------------------------------------------------------
     /// @brief      Notifies the delegate that the platform view was created
@@ -74,6 +82,46 @@ class PlatformView {
     virtual void OnPlatformViewDestroyed() = 0;
 
     //--------------------------------------------------------------------------
+    /// @brief      Notifies the delegate that the platform needs to schedule a
+    ///             frame to regenerate the layer tree and redraw the surface.
+    ///
+    virtual void OnPlatformViewScheduleFrame() = 0;
+
+    /// @brief  Allocate resources for a new non-implicit view and inform
+    ///         Dart about the view, and on success, schedules a new frame.
+    ///
+    ///         After the operation, |callback| should be invoked with whether
+    ///         the operation is successful.
+    ///
+    ///         Adding |kFlutterImplicitViewId| or an existing view ID should
+    ///         result in failure.
+    ///
+    /// @param[in]  view_id           The view ID of the new view.
+    /// @param[in]  viewport_metrics  The initial viewport metrics for the view.
+    /// @param[in]  callback          The callback that's invoked once the shell
+    ///                               has attempted to add the view.
+    ///
+    virtual void OnPlatformViewAddView(int64_t view_id,
+                                       const ViewportMetrics& viewport_metrics,
+                                       AddViewCallback callback) = 0;
+
+    /// @brief  Deallocate resources for a removed view and inform
+    ///         Dart about the removal.
+    ///
+    ///         After the operation, |callback| should be invoked with whether
+    ///         the operation is successful.
+    ///
+    ///         Removing |kFlutterImplicitViewId| or an non-existent view ID
+    ///         should result in failure.
+    ///
+    /// @param[in]  view_id     The view ID of the view to be removed.
+    /// @param[in]  callback    The callback that's invoked once the shell has
+    ///                         attempted to remove the view.
+    ///
+    virtual void OnPlatformViewRemoveView(int64_t view_id,
+                                          RemoveViewCallback callback) = 0;
+
+    //--------------------------------------------------------------------------
     /// @brief      Notifies the delegate that the specified callback needs to
     ///             be invoked after the rasterizer is done rendering the next
     ///             frame. This callback will be called on the render thread and
@@ -93,14 +141,15 @@ class PlatformView {
         const fml::closure& closure) = 0;
 
     //--------------------------------------------------------------------------
-    /// @brief      Notifies the delegate the viewport metrics of the platform
-    ///             view have been updated. The rasterizer will need to be
-    ///             reconfigured to render the frame in the updated viewport
-    ///             metrics.
+    /// @brief      Notifies the delegate the viewport metrics of a view have
+    ///             been updated. The rasterizer will need to be reconfigured to
+    ///             render the frame in the updated viewport metrics.
     ///
+    /// @param[in]  view_id  The ID for the view that `metrics` describes.
     /// @param[in]  metrics  The updated viewport metrics.
     ///
     virtual void OnPlatformViewSetViewportMetrics(
+        int64_t view_id,
         const ViewportMetrics& metrics) = 0;
 
     //--------------------------------------------------------------------------
@@ -133,14 +182,14 @@ class PlatformView {
     ///             event must be forwarded to the running root isolate hosted
     ///             by the engine on the UI thread.
     ///
-    /// @param[in]  id      The identifier of the accessibility node.
+    /// @param[in]  node_id The identifier of the accessibility node.
     /// @param[in]  action  The accessibility related action performed on the
     ///                     node of the specified ID.
     /// @param[in]  args    An optional list of argument that apply to the
     ///                     specified action.
     ///
     virtual void OnPlatformViewDispatchSemanticsAction(
-        int32_t id,
+        int32_t node_id,
         SemanticsAction action,
         fml::MallocMapping args) = 0;
 
@@ -267,7 +316,7 @@ class PlatformView {
     ///                              temporary conditions such as no network.
     ///                              Transient errors allow the dart VM to
     ///                              re-request the same deferred library and
-    ///                              and loading_unit_id again. Non-transient
+    ///                              loading_unit_id again. Non-transient
     ///                              errors are permanent and attempts to
     ///                              re-request the library will instantly
     ///                              complete with an error.
@@ -303,6 +352,15 @@ class PlatformView {
     virtual void UpdateAssetResolverByType(
         std::unique_ptr<AssetResolver> updated_asset_resolver,
         AssetResolver::AssetResolverType type) = 0;
+
+    //--------------------------------------------------------------------------
+    /// @brief      Called by the platform view on the platform thread to get
+    ///             the settings object associated with the platform view
+    ///             instance.
+    ///
+    /// @return     The settings.
+    ///
+    virtual const Settings& OnPlatformViewGetSettings() const = 0;
   };
 
   //----------------------------------------------------------------------------
@@ -316,7 +374,7 @@ class PlatformView {
   /// @param      delegate      The delegate. This is typically the shell.
   /// @param[in]  task_runners  The task runners used by this platform view.
   ///
-  explicit PlatformView(Delegate& delegate, TaskRunners task_runners);
+  explicit PlatformView(Delegate& delegate, const TaskRunners& task_runners);
 
   //----------------------------------------------------------------------------
   /// @brief      Destroys the platform view. The platform view is owned by the
@@ -386,12 +444,12 @@ class PlatformView {
   /// @brief      Used by embedders to dispatch an accessibility action to a
   ///             running isolate hosted by the engine.
   ///
-  /// @param[in]  id      The identifier of the accessibility node on which to
+  /// @param[in]  node_id The identifier of the accessibility node on which to
   ///                     perform the action.
   /// @param[in]  action  The action
   /// @param[in]  args    The arguments
   ///
-  void DispatchSemanticsAction(int32_t id,
+  void DispatchSemanticsAction(int32_t node_id,
                                SemanticsAction action,
                                fml::MallocMapping args);
 
@@ -445,16 +503,28 @@ class PlatformView {
                                CustomAccessibilityActionUpdates actions);
 
   //----------------------------------------------------------------------------
-  /// @brief      Used by embedders to specify the updated viewport metrics. In
-  ///             response to this call, on the raster thread, the rasterizer
-  ///             may need to be reconfigured to the updated viewport
+  /// @brief      Used by the framework to tell the embedder that it has
+  ///             registered a listener on a given channel.
+  ///
+  /// @param[in]  name      The name of the channel on which the listener has
+  ///                       set or cleared a listener.
+  /// @param[in]  listening True if a listener has been set, false if it has
+  ///                       been cleared.
+  ///
+  virtual void SendChannelUpdate(const std::string& name, bool listening);
+
+  //----------------------------------------------------------------------------
+  /// @brief      Used by embedders to specify the updated viewport metrics for
+  ///             a view. In response to this call, on the raster thread, the
+  ///             rasterizer may need to be reconfigured to the updated viewport
   ///             dimensions. On the UI thread, the framework may need to start
   ///             generating a new frame for the updated viewport metrics as
   ///             well.
   ///
+  /// @param[in]  view_id  The ID for the view that `metrics` describes.
   /// @param[in]  metrics  The updated viewport metrics.
   ///
-  void SetViewportMetrics(const ViewportMetrics& metrics);
+  void SetViewportMetrics(int64_t view_id, const ViewportMetrics& metrics);
 
   //----------------------------------------------------------------------------
   /// @brief      Used by embedders to notify the shell that a platform view
@@ -477,6 +547,63 @@ class PlatformView {
   ///             class method at some point in their implementation.
   ///
   virtual void NotifyDestroyed();
+
+  //----------------------------------------------------------------------------
+  /// @brief      Used by embedders to schedule a frame. In response to this
+  ///             call, the framework may need to start generating a new frame.
+  ///
+  void ScheduleFrame();
+
+  /// @brief  Used by embedders to notify the shell of a new non-implicit view.
+  ///
+  ///         This method notifies the shell to allocate resources and inform
+  ///         Dart about the view, and on success, schedules a new frame.
+  ///         Finally, it invokes |callback| with whether the operation is
+  ///         successful.
+  ///
+  ///         This operation is asynchronous; avoid using the view until
+  ///         |callback| returns true. Callers should prepare resources for the
+  ///         view (if any) in advance but be ready to clean up on failure.
+  ///
+  ///         The callback is called on a different thread.
+  ///
+  ///         Do not use for implicit views, which are added internally during
+  ///         shell initialization. Adding |kFlutterImplicitViewId| or an
+  ///         existing view ID will fail, indicated by |callback| returning
+  ///         false.
+  ///
+  /// @param[in]  view_id           The view ID of the new view.
+  /// @param[in]  viewport_metrics  The initial viewport metrics for the view.
+  /// @param[in]  callback          The callback that's invoked once the shell
+  ///                               has attempted to add the view.
+  ///
+  void AddView(int64_t view_id,
+               const ViewportMetrics& viewport_metrics,
+               AddViewCallback callback);
+
+  /// @brief  Used by embedders to notify the shell of a removed non-implicit
+  ///         view.
+  ///
+  ///         This method notifies the shell to deallocate resources and inform
+  ///         Dart about the removal. Finally, it invokes |callback| with
+  ///         whether the operation is successful.
+  ///
+  ///         This operation is asynchronous. The embedder should not deallocate
+  ///         resources until the |callback| is invoked.
+  ///
+  ///         The callback is called on a different thread.
+  ///
+  ///         Do not use for implicit views, which are never removed throughout
+  ///         the lifetime of the app.
+  ///         Removing |kFlutterImplicitViewId| or an
+  ///         non-existent view ID will fail, indicated by |callback| returning
+  ///         false.
+  ///
+  /// @param[in]  view_id     The view ID of the view to be removed.
+  /// @param[in]  callback    The callback that's invoked once the shell has
+  ///                         attempted to remove the view.
+  ///
+  void RemoveView(int64_t view_id, RemoveViewCallback callback);
 
   //----------------------------------------------------------------------------
   /// @brief      Used by the shell to obtain a Skia GPU context that is capable
@@ -504,12 +631,14 @@ class PlatformView {
   ///
   virtual sk_sp<GrDirectContext> CreateResourceContext() const;
 
+  virtual std::shared_ptr<impeller::Context> GetImpellerContext() const;
+
   //----------------------------------------------------------------------------
   /// @brief      Used by the shell to notify the embedder that the resource
   ///             context previously obtained via a call to
-  ///             `CreateResourceContext()` is being collected. The embedder is
-  ///             free to collect an platform specific resources associated with
-  ///             this context.
+  ///             `CreateResourceContext()` is being collected. The embedder
+  ///             is free to collect an platform specific resources
+  ///             associated with this context.
   ///
   /// @attention  Unlike all other methods on the platform view, this will be
   ///             called on IO task runner.
@@ -601,8 +730,7 @@ class PlatformView {
 
   //--------------------------------------------------------------------------
   /// @brief      Used by the embedder to notify the rasterizer that it will
-  /// no
-  ///             longer attempt to composite the specified texture within
+  ///             no longer attempt to composite the specified texture within
   ///             the layer tree. This allows the rasterizer to collect
   ///             associated resources.
   ///
@@ -732,7 +860,7 @@ class PlatformView {
   ///                              temporary conditions such as no network.
   ///                              Transient errors allow the dart VM to
   ///                              re-request the same deferred library and
-  ///                              and loading_unit_id again. Non-transient
+  ///                              loading_unit_id again. Non-transient
   ///                              errors are permanent and attempts to
   ///                              re-request the library will instantly
   ///                              complete with an error.
@@ -793,9 +921,38 @@ class PlatformView {
   /// @details If this returns `null` that means PlatformMessages should be sent
   /// to the PlatformView.  That is to protect legacy behavior, any embedder
   /// that wants to support executing Platform Channel handlers on background
-  /// threads should be returing a thread-safe PlatformMessageHandler instead.
+  /// threads should be returning a thread-safe PlatformMessageHandler instead.
   virtual std::shared_ptr<PlatformMessageHandler> GetPlatformMessageHandler()
       const;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Get the settings for this platform view instance.
+  ///
+  /// @return     The settings.
+  ///
+  const Settings& GetSettings() const;
+
+  //--------------------------------------------------------------------------
+  /// @brief      Synchronously invokes platform-specific APIs to apply the
+  ///             system text scaling on the given unscaled font size.
+  ///
+  ///             Platforms that support this feature (currently it's only
+  ///             implemented for Android SDK level 34+) will send a valid
+  ///             configuration_id to potential callers, before this method can
+  ///             be called.
+  ///
+  /// @param[in]  unscaled_font_size  The unscaled font size specified by the
+  ///                                 app developer. The value is in logical
+  ///                                 pixels, and is guaranteed to be finite and
+  ///                                 non-negative.
+  /// @param[in]  configuration_id    The unique id of the configuration to use
+  ///                                 for computing the scaled font size.
+  ///
+  /// @return     The scaled font size in logical pixels, or -1 if the given
+  ///             configuration_id did not match a valid configuration.
+  ///
+  virtual double GetScaledFontSize(double unscaled_font_size,
+                                   int configuration_id) const;
 
  protected:
   // This is the only method called on the raster task runner.
@@ -803,8 +960,6 @@ class PlatformView {
 
   PlatformView::Delegate& delegate_;
   const TaskRunners task_runners_;
-  PointerDataPacketConverter pointer_data_packet_converter_;
-  SkISize size_;
   fml::WeakPtrFactory<PlatformView> weak_factory_;  // Must be the last member.
 
  private:
@@ -813,4 +968,4 @@ class PlatformView {
 
 }  // namespace flutter
 
-#endif  // COMMON_PLATFORM_VIEW_H_
+#endif  // FLUTTER_SHELL_COMMON_PLATFORM_VIEW_H_

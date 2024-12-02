@@ -11,7 +11,10 @@
 #include "flutter/fml/macros.h"
 #include "flutter/fml/memory/weak_ptr.h"
 #include "flutter/lib/ui/io_manager.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrTypes.h"
+
+struct GrGLInterface;
 
 namespace flutter {
 
@@ -21,13 +24,16 @@ class ShellIOManager final : public IOManager {
   // supply to the IOManager. The platforms may create the context themselves if
   // they so desire.
   static sk_sp<GrDirectContext> CreateCompatibleResourceLoadingContext(
-      GrBackend backend,
-      sk_sp<const GrGLInterface> gl_interface);
+      GrBackendApi backend,
+      const sk_sp<const GrGLInterface>& gl_interface);
 
   ShellIOManager(
       sk_sp<GrDirectContext> resource_context,
       std::shared_ptr<const fml::SyncSwitch> is_gpu_disabled_sync_switch,
-      fml::RefPtr<fml::TaskRunner> unref_queue_task_runner);
+      fml::RefPtr<fml::TaskRunner> unref_queue_task_runner,
+      std::shared_ptr<impeller::Context> impeller_context,
+      fml::TimeDelta unref_queue_drain_delay =
+          fml::TimeDelta::FromMilliseconds(8));
 
   ~ShellIOManager() override;
 
@@ -56,21 +62,18 @@ class ShellIOManager final : public IOManager {
   // |IOManager|
   std::shared_ptr<const fml::SyncSwitch> GetIsGpuDisabledSyncSwitch() override;
 
-  sk_sp<GrDirectContext> GetSharedResourceContext() const {
-    return resource_context_;
-  };
+  // |IOManager|
+  std::shared_ptr<impeller::Context> GetImpellerContext() const override;
 
  private:
   // Resource context management.
   sk_sp<GrDirectContext> resource_context_;
   std::unique_ptr<fml::WeakPtrFactory<GrDirectContext>>
       resource_context_weak_factory_;
-
   // Unref queue management.
   fml::RefPtr<flutter::SkiaUnrefQueue> unref_queue_;
-
   std::shared_ptr<const fml::SyncSwitch> is_gpu_disabled_sync_switch_;
-
+  std::shared_ptr<impeller::Context> impeller_context_;
   fml::WeakPtrFactory<ShellIOManager> weak_factory_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(ShellIOManager);

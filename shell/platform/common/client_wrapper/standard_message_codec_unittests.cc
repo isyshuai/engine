@@ -17,11 +17,14 @@ namespace {
 
 class MockStandardCodecSerializer : public StandardCodecSerializer {
  public:
-  MOCK_CONST_METHOD2(WriteValue,
-                     void(const EncodableValue& value,
-                          ByteStreamWriter* stream));
-  MOCK_CONST_METHOD2(ReadValueOfType,
-                     EncodableValue(uint8_t type, ByteStreamReader* stream));
+  MOCK_METHOD(void,
+              WriteValue,
+              (const EncodableValue& value, ByteStreamWriter* stream),
+              (const, override));
+  MOCK_METHOD(EncodableValue,
+              ReadValueOfType,
+              (uint8_t type, ByteStreamReader* stream),
+              (const, override));
 };
 }  // namespace
 
@@ -35,7 +38,7 @@ static void CheckEncodeDecode(
     const EncodableValue& value,
     const std::vector<uint8_t>& expected_encoding,
     const StandardCodecSerializer* serializer = nullptr,
-    std::function<bool(const EncodableValue& a, const EncodableValue& b)>
+    const std::function<bool(const EncodableValue& a, const EncodableValue& b)>&
         custom_comparator = nullptr) {
   const StandardMessageCodec& codec =
       StandardMessageCodec::GetInstance(serializer);

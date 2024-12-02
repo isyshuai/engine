@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ui/ui.dart' as ui;
 
 import '../browser_detection.dart';
+import '../dom.dart';
 import '../safe_browser_api.dart';
 import '../util.dart';
 import '../vector_math.dart';
@@ -21,24 +21,14 @@ import 'shaders/vertex_shaders.dart';
 GlRenderer? glRenderer;
 
 class SurfaceVertices implements ui.Vertices {
-  final ui.VertexMode mode;
-  final Float32List positions;
-  final Int32List? colors;
-  final Uint16List? indices; // ignore: unused_field
-
   SurfaceVertices(
     this.mode,
     List<ui.Offset> positions, {
     List<ui.Color>? colors,
     List<int>? indices,
-  })  : assert(mode != null), // ignore: unnecessary_null_comparison
-        assert(positions != null), // ignore: unnecessary_null_comparison
-        // ignore: unnecessary_this
-        this.colors = colors != null ? _int32ListFromColors(colors) : null,
-        // ignore: unnecessary_this
-        this.indices = indices != null ? Uint16List.fromList(indices) : null,
-        // ignore: unnecessary_this
-        this.positions = offsetListToFloat32List(positions) {
+  })  : colors = colors != null ? _int32ListFromColors(colors) : null,
+        indices = indices != null ? Uint16List.fromList(indices) : null,
+        positions = offsetListToFloat32List(positions) {
     initWebGl();
   }
 
@@ -47,10 +37,14 @@ class SurfaceVertices implements ui.Vertices {
     this.positions, {
     this.colors,
     this.indices,
-  })  : assert(mode != null), // ignore: unnecessary_null_comparison
-        assert(positions != null) { // ignore: unnecessary_null_comparison
+  }) {
     initWebGl();
   }
+
+  final ui.VertexMode mode;
+  final Float32List positions;
+  final Int32List? colors;
+  final Uint16List? indices;
 
   static Int32List _int32ListFromColors(List<ui.Color> colors) {
     final Int32List list = Int32List(colors.length);
@@ -59,6 +53,28 @@ class SurfaceVertices implements ui.Vertices {
       list[i] = colors[i].value;
     }
     return list;
+  }
+
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+  }
+
+  @override
+  bool get debugDisposed {
+    bool? result;
+    assert(() {
+      result = _disposed;
+      return true;
+    }());
+
+    if (result != null) {
+      return result!;
+    }
+
+    throw StateError('Vertices.debugDisposed is only available when asserts are enabled.');
   }
 }
 
@@ -70,14 +86,9 @@ void initWebGl() {
   glRenderer ??= _WebGlRenderer();
 }
 
-void disposeWebGl() {
-  GlContextCache.dispose();
-  glRenderer = null;
-}
-
 abstract class GlRenderer {
   void drawVertices(
-      html.CanvasRenderingContext2D? context,
+      DomCanvasRenderingContext2D? context,
       int canvasWidthInPixels,
       int canvasHeightInPixels,
       Matrix4 transform,
@@ -96,7 +107,7 @@ abstract class GlRenderer {
       int widthInPixels,
       int heightInPixels);
 
-  void drawHairline(html.CanvasRenderingContext2D? _ctx, Float32List positions);
+  void drawHairline(DomCanvasRenderingContext2D? ctx, Float32List positions);
 }
 
 /// Treeshakeable backend for rendering webgl on canvas.
@@ -106,7 +117,7 @@ abstract class GlRenderer {
 class _WebGlRenderer implements GlRenderer {
   @override
   void drawVertices(
-      html.CanvasRenderingContext2D? context,
+      DomCanvasRenderingContext2D? context,
       int canvasWidthInPixels,
       int canvasHeightInPixels,
       Matrix4 transform,
@@ -185,7 +196,6 @@ class _WebGlRenderer implements GlRenderer {
     //
     // Create buffer for vertex coordinates.
     final Object positionsBuffer = gl.createBuffer()!;
-    assert(positionsBuffer != null); // ignore: unnecessary_null_comparison
 
     Object? vao;
     if (imageShader != null) {
@@ -223,10 +233,9 @@ class _WebGlRenderer implements GlRenderer {
 
       // Buffer kBGRA_8888.
       if (vertices.colors == null) {
-        final ui.Color color = paint.color ?? const ui.Color(0xFF000000);
         final Uint32List vertexColors = Uint32List(vertexCount);
         for (int i = 0; i < vertexCount; i++) {
-          vertexColors[i] = color.value;
+          vertexColors[i] = paint.color;
         }
         gl.bufferData(vertexColors, gl.kStaticDraw);
       } else {
@@ -317,7 +326,7 @@ class _WebGlRenderer implements GlRenderer {
       NormalizedGradient gradient, int widthInPixels, int heightInPixels) {
     drawRectToGl(
         targetRect, gl, glProgram, gradient, widthInPixels, heightInPixels);
-    final Object? image = gl.readPatternData();
+    final Object? image = gl.readPatternData(gradient.isOpaque);
     gl.bindArrayBuffer(null);
     gl.bindElementArrayBuffer(null);
     return image;
@@ -377,7 +386,6 @@ class _WebGlRenderer implements GlRenderer {
 
     // Setup geometry.
     final Object positionsBuffer = gl.createBuffer()!;
-    assert(positionsBuffer != null); // ignore: unnecessary_null_comparison
     gl.bindArrayBuffer(positionsBuffer);
     gl.bufferData(vertices, gl.kStaticDraw);
     // Point an attribute to the currently bound vertex buffer object.
@@ -451,11 +459,10 @@ class _WebGlRenderer implements GlRenderer {
 
   @override
   void drawHairline(
-      html.CanvasRenderingContext2D? _ctx, Float32List positions) {
-    assert(positions != null); // ignore: unnecessary_null_comparison
+      DomCanvasRenderingContext2D? ctx, Float32List positions) {
     final int pointCount = positions.length ~/ 2;
-    _ctx!.lineWidth = 1.0;
-    _ctx.beginPath();
+    ctx!.lineWidth = 1.0;
+    ctx.beginPath();
     final int len = pointCount * 2;
     for (int i = 0; i < len;) {
       for (int triangleVertexIndex = 0;
@@ -465,15 +472,13 @@ class _WebGlRenderer implements GlRenderer {
         final double dy = positions[i + 1];
         switch (triangleVertexIndex) {
           case 0:
-            _ctx.moveTo(dx, dy);
-            break;
+            ctx.moveTo(dx, dy);
           case 1:
-            _ctx.lineTo(dx, dy);
-            break;
+            ctx.lineTo(dx, dy);
           case 2:
-            _ctx.lineTo(dx, dy);
-            _ctx.closePath();
-            _ctx.stroke();
+            ctx.lineTo(dx, dy);
+            ctx.closePath();
+            ctx.stroke();
         }
       }
     }

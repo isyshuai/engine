@@ -5,6 +5,8 @@
 #ifndef FLUTTER_SHELL_PLATFORM_ANDROID_JNI_PLATFORM_VIEW_ANDROID_JNI_H_
 #define FLUTTER_SHELL_PLATFORM_ANDROID_JNI_PLATFORM_VIEW_ANDROID_JNI_H_
 
+#include <utility>
+
 #include "flutter/fml/macros.h"
 #include "flutter/fml/mapping.h"
 
@@ -13,13 +15,13 @@
 #include "flutter/shell/platform/android/surface/android_native_window.h"
 #include "third_party/skia/include/core/SkMatrix.h"
 
-#if OS_ANDROID
+#if FML_OS_ANDROID
 #include "flutter/fml/platform/android/scoped_java_ref.h"
 #endif
 
 namespace flutter {
 
-#if OS_ANDROID
+#if FML_OS_ANDROID
 using JavaLocalRef = fml::jni::ScopedJavaLocalRef<jobject>;
 #else
 using JavaLocalRef = std::nullptr_t;
@@ -90,6 +92,11 @@ class PlatformViewAndroidJNI {
                                                int textureId) = 0;
 
   //----------------------------------------------------------------------------
+  /// @brief      Returns true if surface_texture should be updated.
+  ///
+  virtual bool SurfaceTextureShouldUpdate(JavaLocalRef surface_texture) = 0;
+
+  //----------------------------------------------------------------------------
   /// @brief      Updates the texture image to the most recent frame from the
   ///             image stream.
   ///
@@ -100,14 +107,35 @@ class PlatformViewAndroidJNI {
   ///             Then, it updates the `transform` matrix, so it fill the canvas
   ///             and preserve the aspect ratio.
   ///
-  virtual void SurfaceTextureGetTransformMatrix(JavaLocalRef surface_texture,
-                                                SkMatrix& transform) = 0;
+  virtual SkM44 SurfaceTextureGetTransformMatrix(
+      JavaLocalRef surface_texture) = 0;
 
   //----------------------------------------------------------------------------
   /// @brief      Detaches a SurfaceTexture from the OpenGL ES context.
   ///
   virtual void SurfaceTextureDetachFromGLContext(
       JavaLocalRef surface_texture) = 0;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Acquire the latest image available.
+  ///
+  virtual JavaLocalRef ImageProducerTextureEntryAcquireLatestImage(
+      JavaLocalRef image_texture_entry) = 0;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Grab the HardwareBuffer from image.
+  ///
+  virtual JavaLocalRef ImageGetHardwareBuffer(JavaLocalRef image) = 0;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Call close on image.
+  ///
+  virtual void ImageClose(JavaLocalRef image) = 0;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Call close on hardware_buffer.
+  ///
+  virtual void HardwareBufferClose(JavaLocalRef hardware_buffer) = 0;
 
   //----------------------------------------------------------------------------
   /// @brief      Positions and sizes a platform view if using hybrid
@@ -158,7 +186,7 @@ class PlatformViewAndroidJNI {
   ///
   struct OverlayMetadata {
     OverlayMetadata(int id, fml::RefPtr<AndroidNativeWindow> window)
-        : id(id), window(window){};
+        : id(id), window(std::move(window)){};
 
     ~OverlayMetadata() = default;
 
@@ -195,7 +223,16 @@ class PlatformViewAndroidJNI {
 
   virtual double GetDisplayRefreshRate() = 0;
 
+  virtual double GetDisplayWidth() = 0;
+
+  virtual double GetDisplayHeight() = 0;
+
+  virtual double GetDisplayDensity() = 0;
+
   virtual bool RequestDartDeferredLibrary(int loading_unit_id) = 0;
+
+  virtual double FlutterViewGetScaledFontSize(double unscaled_font_size,
+                                              int configuration_id) const = 0;
 };
 
 }  // namespace flutter

@@ -1,16 +1,19 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 package io.flutter.embedding.engine;
 
-import static junit.framework.TestCase.assertTrue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import androidx.annotation.NonNull;
 import androidx.lifecycle.Lifecycle;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import io.flutter.embedding.android.ExclusiveAppComponent;
 import io.flutter.embedding.engine.loader.FlutterLoader;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
@@ -21,12 +24,11 @@ import io.flutter.plugin.platform.PlatformViewsController;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 // Run with Robolectric so that Log calls don't crash.
 @Config(manifest = Config.NONE)
-@RunWith(RobolectricTestRunner.class)
+@RunWith(AndroidJUnit4.class)
 public class FlutterEngineConnectionRegistryTest {
   @Test
   public void itDoesNotRegisterTheSamePluginTwice() {
@@ -42,7 +44,7 @@ public class FlutterEngineConnectionRegistryTest {
     FakeFlutterPlugin fakePlugin2 = new FakeFlutterPlugin();
 
     FlutterEngineConnectionRegistry registry =
-        new FlutterEngineConnectionRegistry(context, flutterEngine, flutterLoader);
+        new FlutterEngineConnectionRegistry(context, flutterEngine, flutterLoader, null);
 
     // Verify that the registry doesn't think it contains our plugin yet.
     assertFalse(registry.has(fakePlugin1.getClass()));
@@ -80,13 +82,15 @@ public class FlutterEngineConnectionRegistryTest {
     Activity activity = mock(Activity.class);
     when(appComponent.getAppComponent()).thenReturn(activity);
 
-    Lifecycle lifecycle = mock(Lifecycle.class);
     Intent intent = mock(Intent.class);
+    when(activity.getIntent()).thenReturn(intent);
+
+    Lifecycle lifecycle = mock(Lifecycle.class);
     AtomicBoolean isFirstCall = new AtomicBoolean(true);
 
     // Set up the environment to get the required internal data
     FlutterEngineConnectionRegistry registry =
-        new FlutterEngineConnectionRegistry(context, flutterEngine, flutterLoader);
+        new FlutterEngineConnectionRegistry(context, flutterEngine, flutterLoader, null);
     FakeActivityAwareFlutterPlugin fakePlugin = new FakeActivityAwareFlutterPlugin();
     registry.add(fakePlugin);
     registry.attachToActivity(appComponent, lifecycle);
@@ -111,6 +115,39 @@ public class FlutterEngineConnectionRegistryTest {
 
     // The order of the listeners in the HashSet is random: So just check the sum of calls
     assertEquals(3, listener1.callCount + listener2.callCount);
+  }
+
+  @Test
+  public void softwareRendering() {
+    Context context = mock(Context.class);
+
+    FlutterEngine flutterEngine = mock(FlutterEngine.class);
+    PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
+    when(flutterEngine.getPlatformViewsController()).thenReturn(platformViewsController);
+
+    FlutterLoader flutterLoader = mock(FlutterLoader.class);
+
+    ExclusiveAppComponent appComponent = mock(ExclusiveAppComponent.class);
+    Activity activity = mock(Activity.class);
+    when(appComponent.getAppComponent()).thenReturn(activity);
+
+    // Test attachToActivity with an Activity that has no Intent.
+    FlutterEngineConnectionRegistry registry =
+        new FlutterEngineConnectionRegistry(context, flutterEngine, flutterLoader, null);
+    registry.attachToActivity(appComponent, mock(Lifecycle.class));
+    verify(platformViewsController).setSoftwareRendering(false);
+
+    Intent intent = mock(Intent.class);
+    when(intent.getBooleanExtra("enable-software-rendering", false)).thenReturn(false);
+    when(activity.getIntent()).thenReturn(intent);
+
+    registry.attachToActivity(appComponent, mock(Lifecycle.class));
+    verify(platformViewsController, times(2)).setSoftwareRendering(false);
+
+    when(intent.getBooleanExtra("enable-software-rendering", false)).thenReturn(true);
+
+    registry.attachToActivity(appComponent, mock(Lifecycle.class));
+    verify(platformViewsController).setSoftwareRendering(true);
   }
 
   private static class FakeFlutterPlugin implements FlutterPlugin {

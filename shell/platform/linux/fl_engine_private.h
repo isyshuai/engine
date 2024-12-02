@@ -8,6 +8,7 @@
 #include <glib-object.h>
 
 #include "flutter/shell/platform/embedder/embedder.h"
+#include "flutter/shell/platform/linux/fl_mouse_cursor_handler.h"
 #include "flutter/shell/platform/linux/fl_renderer.h"
 #include "flutter/shell/platform/linux/fl_task_runner.h"
 #include "flutter/shell/platform/linux/public/flutter_linux/fl_dart_project.h"
@@ -46,30 +47,20 @@ typedef gboolean (*FlEnginePlatformMessageHandler)(
     gpointer user_data);
 
 /**
- * FlEngineUpdateSemanticsNodeHandler:
+ * FlEngineUpdateSemanticsHandler:
  * @engine: an #FlEngine.
  * @node: semantic node information.
  * @user_data: (closure): data provided when registering this handler.
  *
  * Function called when semantics node updates are received.
  */
-typedef void (*FlEngineUpdateSemanticsNodeHandler)(
+typedef void (*FlEngineUpdateSemanticsHandler)(
     FlEngine* engine,
-    const FlutterSemanticsNode* node,
+    const FlutterSemanticsUpdate2* update,
     gpointer user_data);
 
 /**
- * FlEngineOnPreEngineRestartHandler:
- * @engine: an #FlEngine.
- * @user_data: semantic node information.
- *
- * @user_data: (closure): data provided when registering this handler.
- */
-typedef void (*FlEngineOnPreEngineRestartHandler)(FlEngine* engine,
-                                                  gpointer user_data);
-
-/**
- * fl_engine_new:
+ * fl_engine_new_with_renderer:
  * @project: an #FlDartProject.
  * @renderer: an #FlRenderer.
  *
@@ -77,69 +68,18 @@ typedef void (*FlEngineOnPreEngineRestartHandler)(FlEngine* engine,
  *
  * Returns: a new #FlEngine.
  */
-FlEngine* fl_engine_new(FlDartProject* project, FlRenderer* renderer);
+FlEngine* fl_engine_new_with_renderer(FlDartProject* project,
+                                      FlRenderer* renderer);
 
 /**
- * fl_engine_get_embedder_api:
+ * fl_engine_get_renderer:
  * @engine: an #FlEngine.
  *
- * Gets the embedder API proc table, allowing modificiations for unit testing.
+ * Gets the renderer used by this engine.
  *
- * Returns: a mutable pointer to the embedder API proc table.
+ * Returns: an #FlRenderer.
  */
-FlutterEngineProcTable* fl_engine_get_embedder_api(FlEngine* engine);
-
-/**
- * fl_engine_set_platform_message_handler:
- * @engine: an #FlEngine.
- * @handler: function to call when a platform message is received.
- * @user_data: (closure): user data to pass to @handler.
- * @destroy_notify: (allow-none): a function which gets called to free
- * @user_data, or %NULL.
- *
- * Registers the function called when a platform message is received. Call
- * fl_engine_send_platform_message_response() with the response to this message.
- * Ownership of #FlutterPlatformMessageResponseHandle is
- * transferred to the caller, and the message must be responded to to avoid
- * memory leaks.
- */
-void fl_engine_set_platform_message_handler(
-    FlEngine* engine,
-    FlEnginePlatformMessageHandler handler,
-    gpointer user_data,
-    GDestroyNotify destroy_notify);
-
-/**
- * fl_engine_set_update_semantics_node_handler:
- * @engine: an #FlEngine.
- * @handler: function to call when a semantics node update is received.
- * @user_data: (closure): user data to pass to @handler.
- * @destroy_notify: (allow-none): a function which gets called to free
- * @user_data, or %NULL.
- *
- * Registers the function called when a semantics node update is reveived.
- */
-void fl_engine_set_update_semantics_node_handler(
-    FlEngine* engine,
-    FlEngineUpdateSemanticsNodeHandler handler,
-    gpointer user_data,
-    GDestroyNotify destroy_notify);
-
-/**
- * fl_engine_set_on_pre_engine_restart_handler:
- * @engine: an #FlEngine.
- * @handler: function to call when the engine is restarted.
- * @user_data: (closure): user data to pass to @handler.
- * @destroy_notify: (allow-none): a function which gets called to free
- * @user_data, or %NULL.
- *
- * Registers the function called right before the engine is restarted.
- */
-void fl_engine_set_on_pre_engine_restart_handler(
-    FlEngine* engine,
-    FlEngineOnPreEngineRestartHandler handler,
-    gpointer user_data,
-    GDestroyNotify destroy_notify);
+FlRenderer* fl_engine_get_renderer(FlEngine* engine);
 
 /**
  * fl_engine_start:
@@ -154,8 +94,126 @@ void fl_engine_set_on_pre_engine_restart_handler(
 gboolean fl_engine_start(FlEngine* engine, GError** error);
 
 /**
+ * fl_engine_get_embedder_api:
+ * @engine: an #FlEngine.
+ *
+ * Gets the embedder API proc table, allowing modificiations for unit testing.
+ *
+ * Returns: a mutable pointer to the embedder API proc table.
+ */
+FlutterEngineProcTable* fl_engine_get_embedder_api(FlEngine* engine);
+
+/**
+ * fl_engine_add_view:
+ * @engine: an #FlEngine.
+ * @width: width of view in pixels.
+ * @height: height of view in pixels.
+ * @pixel_ratio: scale factor for view.
+ * @cancellable: (allow-none): a #GCancellable or %NULL.
+ * @callback: (scope async): a #GAsyncReadyCallback to call when the view is
+ * added.
+ * @user_data: (closure): user data to pass to @callback.
+ *
+ * Asynchronously add a new view. The returned view ID should not be used until
+ * this function completes.
+ *
+ * Returns: the ID for the view.
+ */
+FlutterViewId fl_engine_add_view(FlEngine* engine,
+                                 size_t width,
+                                 size_t height,
+                                 double pixel_ratio,
+                                 GCancellable* cancellable,
+                                 GAsyncReadyCallback callback,
+                                 gpointer user_data);
+
+/**
+ * fl_engine_add_view_finish:
+ * @engine: an #FlEngine.
+ * @result: a #GAsyncResult.
+ * @error: (allow-none): #GError location to store the error occurring, or %NULL
+ * to ignore.
+ *
+ * Completes request started with fl_engine_add_view().
+ *
+ * Returns: %TRUE on success.
+ */
+gboolean fl_engine_add_view_finish(FlEngine* engine,
+                                   GAsyncResult* result,
+                                   GError** error);
+
+/**
+ * fl_engine_remove_view:
+ * @engine: an #FlEngine.
+ * @view_id: ID to remove.
+ * @cancellable: (allow-none): a #GCancellable or %NULL.
+ * @callback: (scope async): a #GAsyncReadyCallback to call when the view is
+ * added.
+ * @user_data: (closure): user data to pass to @callback.
+ *
+ * Removes a view previously added with fl_engine_add_view().
+ */
+void fl_engine_remove_view(FlEngine* engine,
+                           FlutterViewId view_id,
+                           GCancellable* cancellable,
+                           GAsyncReadyCallback callback,
+                           gpointer user_data);
+
+/**
+ * fl_engine_remove_view_finish:
+ * @engine: an #FlEngine.
+ * @result: a #GAsyncResult.
+ * @error: (allow-none): #GError location to store the error occurring, or %NULL
+ * to ignore.
+ *
+ * Completes request started with fl_engine_remove_view().
+ *
+ * Returns: %TRUE on succcess.
+ */
+gboolean fl_engine_remove_view_finish(FlEngine* engine,
+                                      GAsyncResult* result,
+                                      GError** error);
+
+/**
+ * fl_engine_set_platform_message_handler:
+ * @engine: an #FlEngine.
+ * @handler: function to call when a platform message is received.
+ * @user_data: (closure): user data to pass to @handler.
+ * @destroy_notify: (allow-none): a function which gets called to free
+ * @user_data, or %NULL.
+ *
+ * Registers the function called when a platform message is received. Call
+ * fl_engine_send_platform_message_response() with the response to this message.
+ * Ownership of #FlutterPlatformMessageResponseHandle is
+ * transferred to the caller, and the message must be responded to avoid
+ * memory leaks.
+ */
+void fl_engine_set_platform_message_handler(
+    FlEngine* engine,
+    FlEnginePlatformMessageHandler handler,
+    gpointer user_data,
+    GDestroyNotify destroy_notify);
+
+/**
+ * fl_engine_set_update_semantics_handler:
+ * @engine: an #FlEngine.
+ * @handler: function to call when a semantics update is received.
+ * @user_data: (closure): user data to pass to @handler.
+ * @destroy_notify: (allow-none): a function which gets called to free
+ * @user_data, or %NULL.
+ *
+ * Registers the function called when a semantics update is received.
+ */
+void fl_engine_set_update_semantics_handler(
+    FlEngine* engine,
+    FlEngineUpdateSemanticsHandler handler,
+    gpointer user_data,
+    GDestroyNotify destroy_notify);
+
+/**
  * fl_engine_send_window_metrics_event:
  * @engine: an #FlEngine.
+ * @view_id: the view that the event occured on.
  * @width: width of the window in pixels.
  * @height: height of the window in pixels.
  * @pixel_ratio: scale factor for window.
@@ -163,6 +221,7 @@ gboolean fl_engine_start(FlEngine* engine, GError** error);
  * Sends a window metrics event to the engine.
  */
 void fl_engine_send_window_metrics_event(FlEngine* engine,
+                                         FlutterViewId view_id,
                                          size_t width,
                                          size_t height,
                                          double pixel_ratio);
@@ -170,10 +229,12 @@ void fl_engine_send_window_metrics_event(FlEngine* engine,
 /**
  * fl_engine_send_mouse_pointer_event:
  * @engine: an #FlEngine.
+ * @view_id: the view that the event occured on.
  * @phase: mouse phase.
  * @timestamp: time when event occurred in microseconds.
  * @x: x location of mouse cursor.
  * @y: y location of mouse cursor.
+ * @device_kind: kind of pointing device.
  * @scroll_delta_x: x offset of scroll.
  * @scroll_delta_y: y offset of scroll.
  * @buttons: buttons that are pressed.
@@ -181,13 +242,41 @@ void fl_engine_send_window_metrics_event(FlEngine* engine,
  * Sends a mouse pointer event to the engine.
  */
 void fl_engine_send_mouse_pointer_event(FlEngine* engine,
+                                        FlutterViewId view_id,
                                         FlutterPointerPhase phase,
                                         size_t timestamp,
                                         double x,
                                         double y,
+                                        FlutterPointerDeviceKind device_kind,
                                         double scroll_delta_x,
                                         double scroll_delta_y,
                                         int64_t buttons);
+
+/**
+ * fl_engine_send_pointer_pan_zoom_event:
+ * @engine: an #FlEngine.
+ * @view_id: the view that the event occured on.
+ * @timestamp: time when event occurred in microseconds.
+ * @x: x location of mouse cursor.
+ * @y: y location of mouse cursor.
+ * @phase: mouse phase.
+ * @pan_x: x offset of the pan/zoom in pixels.
+ * @pan_y: y offset of the pan/zoom in pixels.
+ * @scale: scale of the pan/zoom.
+ * @rotation: rotation of the pan/zoom in radians.
+ *
+ * Sends a pan/zoom pointer event to the engine.
+ */
+void fl_engine_send_pointer_pan_zoom_event(FlEngine* engine,
+                                           FlutterViewId view_id,
+                                           size_t timestamp,
+                                           double x,
+                                           double y,
+                                           FlutterPointerPhase phase,
+                                           double pan_x,
+                                           double pan_y,
+                                           double scale,
+                                           double rotation);
 
 /**
  * fl_engine_send_key_event:
@@ -316,6 +405,33 @@ gboolean fl_engine_register_external_texture(FlEngine* engine,
  */
 gboolean fl_engine_unregister_external_texture(FlEngine* engine,
                                                int64_t texture_id);
+
+/**
+ * fl_engine_update_accessibility_features:
+ * @engine: an #FlEngine.
+ * @flags: the features to enable in the accessibility tree.
+ *
+ * Tells the Flutter engine to update the flags on the accessibility tree.
+ */
+void fl_engine_update_accessibility_features(FlEngine* engine, int32_t flags);
+
+/**
+ * fl_engine_request_app_exit:
+ * @engine: an #FlEngine.
+ *
+ * Request the application exits.
+ */
+void fl_engine_request_app_exit(FlEngine* engine);
+
+/**
+ * fl_engine_get_mouse_cursor_handler:
+ * @engine: an #FlEngine.
+ *
+ * Gets the mouse cursor handler used by this engine.
+ *
+ * Returns: a #FlMouseCursorHandler.
+ */
+FlMouseCursorHandler* fl_engine_get_mouse_cursor_handler(FlEngine* engine);
 
 G_END_DECLS
 

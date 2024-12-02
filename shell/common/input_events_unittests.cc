@@ -5,6 +5,9 @@
 #include "flutter/shell/common/shell_test.h"
 #include "flutter/testing/testing.h"
 
+// CREATE_NATIVE_ENTRY is leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
+
 namespace flutter {
 namespace testing {
 
@@ -15,6 +18,12 @@ using UnitlessTime = int;
 // Signature of a generator function that takes the frame index as input and
 // returns the time of that frame.
 using Generator = std::function<UnitlessTime(int)>;
+
+namespace {
+
+constexpr int64_t kImplicitViewId = 0;
+
+}
 
 //----------------------------------------------------------------------------
 /// Simulate n input events where the i-th one is delivered at delivery_time(i).
@@ -51,7 +60,12 @@ static void TestSimulatedInputEvents(
     bool restart_engine = false) {
   ///// Begin constructing shell ///////////////////////////////////////////////
   auto settings = fixture->CreateSettingsForFixture();
-  std::unique_ptr<Shell> shell = fixture->CreateShell(settings, true);
+  std::unique_ptr<Shell> shell = fixture->CreateShell({
+      .settings = settings,
+      .platform_view_create_callback = ShellTestPlatformViewBuilder({
+          .simulate_vsync = true,
+      }),
+  });
 
   auto configuration = RunConfiguration::InferFromSettings(settings);
   configuration.SetEntrypoint("onPointerDataPacketMain");
@@ -116,14 +130,16 @@ static void TestSimulatedInputEvents(
     for (int i = 0, j = 0; i < num_events; j += 1) {
       double t = j * frame_time;
       while (i < num_events && delivery_time(i) <= t) {
-        ShellTest::DispatchFakePointerData(shell.get());
+        // Use a different x every time for the pointer data converter to
+        // generate non-empty events.
+        ShellTest::DispatchFakePointerData(shell.get(), /*x=*/i);
         i += 1;
       }
-      ShellTest::VSyncFlush(shell.get(), will_draw_new_frame);
+      ShellTest::VSyncFlush(shell.get(), &will_draw_new_frame);
     }
     // Finally, issue a vsync for the pending event that may be generated duing
     // the last vsync.
-    ShellTest::VSyncFlush(shell.get(), will_draw_new_frame);
+    ShellTest::VSyncFlush(shell.get(), &will_draw_new_frame);
   });
 
   simulation.wait();
@@ -138,6 +154,7 @@ static void TestSimulatedInputEvents(
 
   // Make sure that all events have been consumed so
   // https://github.com/flutter/flutter/issues/40863 won't happen again.
+  ASSERT_GT(events_consumed_at_frame.size(), 0u);
   ASSERT_EQ(events_consumed_at_frame.back(), num_events);
 }
 
@@ -173,6 +190,7 @@ void CreateSimulatedPointerData(PointerData& data,
   data.platformData = 0;
   data.scroll_delta_x = 0.0;
   data.scroll_delta_y = 0.0;
+  data.view_id = kImplicitViewId;
 }
 
 TEST_F(ShellTest, MissAtMostOneFrameForIrregularInputEvents) {
@@ -275,7 +293,9 @@ TEST_F(ShellTest, HandlesActualIphoneXsInputEvents) {
   // We don't use `constexpr int frame_time` here because MSVC doesn't handle
   // it well with lambda capture.
   UnitlessTime frame_time = 10000;
-  for (double base_latency_f = 0; base_latency_f < 1; base_latency_f += 0.1) {
+  double base_latency_f = 0.0;
+  for (int i = 0; i < 10; i++) {
+    base_latency_f += 0.1;
     // Everything is converted to int to avoid floating point error in
     // TestSimulatedInputEvents.
     UnitlessTime base_latency =
@@ -295,7 +315,12 @@ TEST_F(ShellTest, HandlesActualIphoneXsInputEvents) {
 TEST_F(ShellTest, CanCorrectlyPipePointerPacket) {
   // Sets up shell with test fixture.
   auto settings = CreateSettingsForFixture();
-  std::unique_ptr<Shell> shell = CreateShell(settings, true);
+  std::unique_ptr<Shell> shell = CreateShell({
+      .settings = settings,
+      .platform_view_create_callback = ShellTestPlatformViewBuilder({
+          .simulate_vsync = true,
+      }),
+  });
 
   auto configuration = RunConfiguration::InferFromSettings(settings);
   configuration.SetEntrypoint("onPointerDataPacketMain");
@@ -330,8 +355,7 @@ TEST_F(ShellTest, CanCorrectlyPipePointerPacket) {
   CreateSimulatedPointerData(data, PointerData::Change::kRemove, 3.0, 4.0);
   packet->SetPointerData(5, data);
   ShellTest::DispatchPointerData(shell.get(), std::move(packet));
-  bool will_draw_new_frame;
-  ShellTest::VSyncFlush(shell.get(), will_draw_new_frame);
+  ShellTest::VSyncFlush(shell.get());
 
   reportLatch.Wait();
   size_t expect_length = 6;
@@ -356,7 +380,12 @@ TEST_F(ShellTest, CanCorrectlyPipePointerPacket) {
 TEST_F(ShellTest, CanCorrectlySynthesizePointerPacket) {
   // Sets up shell with test fixture.
   auto settings = CreateSettingsForFixture();
-  std::unique_ptr<Shell> shell = CreateShell(settings, true);
+  std::unique_ptr<Shell> shell = CreateShell({
+      .settings = settings,
+      .platform_view_create_callback = ShellTestPlatformViewBuilder({
+          .simulate_vsync = true,
+      }),
+  });
 
   auto configuration = RunConfiguration::InferFromSettings(settings);
   configuration.SetEntrypoint("onPointerDataPacketMain");
@@ -387,8 +416,7 @@ TEST_F(ShellTest, CanCorrectlySynthesizePointerPacket) {
   CreateSimulatedPointerData(data, PointerData::Change::kRemove, 3.0, 4.0);
   packet->SetPointerData(3, data);
   ShellTest::DispatchPointerData(shell.get(), std::move(packet));
-  bool will_draw_new_frame;
-  ShellTest::VSyncFlush(shell.get(), will_draw_new_frame);
+  ShellTest::VSyncFlush(shell.get());
 
   reportLatch.Wait();
   size_t expect_length = 6;
@@ -414,3 +442,5 @@ TEST_F(ShellTest, CanCorrectlySynthesizePointerPacket) {
 
 }  // namespace testing
 }  // namespace flutter
+
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)

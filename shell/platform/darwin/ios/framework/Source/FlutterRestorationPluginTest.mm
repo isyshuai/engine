@@ -9,6 +9,8 @@
 
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterChannels.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterMacros.h"
+#import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterViewController.h"
+#import "flutter/shell/platform/darwin/ios/framework/Source/FlutterViewController_Internal.h"
 
 FLUTTER_ASSERT_ARC
 
@@ -36,6 +38,32 @@ FLUTTER_ASSERT_ARC
 
 #pragma mark - Tests
 
+- (void)testRestoratonViewControllerEncodeAndDecode {
+  FlutterEngine* engine = [[FlutterEngine alloc] initWithName:@"test"
+                                                      project:nil
+                                       allowHeadlessExecution:YES
+                                           restorationEnabled:YES];
+  [engine run];
+  FlutterViewController* flutterViewController =
+      [[FlutterViewController alloc] initWithEngine:engine nibName:nil bundle:nil];
+  FlutterRestorationPlugin* restorationPlugin = flutterViewController.restorationPlugin;
+
+  NSData* data = [@"testrestortiondata" dataUsingEncoding:NSUTF8StringEncoding];
+  [restorationPlugin setRestorationData:data];
+
+  NSKeyedArchiver* archiver = [[NSKeyedArchiver alloc] initRequiringSecureCoding:YES];
+  [flutterViewController encodeRestorableStateWithCoder:archiver];
+
+  [restorationPlugin setRestorationData:nil];
+
+  NSKeyedUnarchiver* unarchiver =
+      [[NSKeyedUnarchiver alloc] initForReadingWithData:archiver.encodedData];
+  [flutterViewController decodeRestorableStateWithCoder:unarchiver];
+
+  XCTAssert([[restorationPlugin restorationData] isEqualToData:data],
+            "Restoration state data must be equal");
+}
+
 - (void)testRestorationEnabledWaitsForData {
   FlutterRestorationPlugin* restorationPlugin =
       [[FlutterRestorationPlugin alloc] initWithChannel:restorationChannel restorationEnabled:YES];
@@ -52,7 +80,7 @@ FLUTTER_ASSERT_ARC
   [restorationPlugin setRestorationData:data];
   XCTAssertEqual([capturedResult count], 2u);
   XCTAssertEqual([capturedResult objectForKey:@"enabled"], @YES);
-  XCTAssertEqual([[capturedResult objectForKey:@"data"] data], data);
+  XCTAssertEqualObjects([[capturedResult objectForKey:@"data"] data], data);
 }
 
 - (void)testRestorationDisabledRespondsRightAway {
@@ -84,7 +112,7 @@ FLUTTER_ASSERT_ARC
                                }];
   XCTAssertEqual([capturedResult count], 2u);
   XCTAssertEqual([capturedResult objectForKey:@"enabled"], @YES);
-  XCTAssertEqual([[capturedResult objectForKey:@"data"] data], data);
+  XCTAssertEqualObjects([[capturedResult objectForKey:@"data"] data], data);
 }
 
 - (void)testRespondsWithNoDataWhenRestorationIsCompletedWithoutData {
@@ -133,7 +161,7 @@ FLUTTER_ASSERT_ARC
                                result:^(id _Nullable result) {
                                  XCTAssertNil(result);
                                }];
-  XCTAssertEqual([restorationPlugin restorationData], data);
+  XCTAssertEqualObjects([restorationPlugin restorationData], data);
 }
 
 - (void)testRespondsWithDataSetByFramework {
@@ -149,7 +177,7 @@ FLUTTER_ASSERT_ARC
                                result:^(id _Nullable result) {
                                  XCTAssertNil(result);
                                }];
-  XCTAssertEqual([restorationPlugin restorationData], data);
+  XCTAssertEqualObjects([restorationPlugin restorationData], data);
 
   __block id capturedResult;
   methodCall = [FlutterMethodCall methodCallWithMethodName:@"get" arguments:nil];
@@ -159,7 +187,7 @@ FLUTTER_ASSERT_ARC
                                }];
   XCTAssertEqual([capturedResult count], 2u);
   XCTAssertEqual([capturedResult objectForKey:@"enabled"], @YES);
-  XCTAssertEqual([[capturedResult objectForKey:@"data"] data], data);
+  XCTAssertEqualObjects([[capturedResult objectForKey:@"data"] data], data);
 }
 
 - (void)testResetClearsData {
@@ -175,7 +203,7 @@ FLUTTER_ASSERT_ARC
                                result:^(id _Nullable result) {
                                  XCTAssertNil(result);
                                }];
-  XCTAssertEqual([restorationPlugin restorationData], data);
+  XCTAssertEqualObjects([restorationPlugin restorationData], data);
 
   [restorationPlugin reset];
   XCTAssertNil([restorationPlugin restorationData]);

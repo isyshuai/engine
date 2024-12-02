@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERTEXTUREREGISTRAR_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERTEXTUREREGISTRAR_H_
+
 #import <Cocoa/Cocoa.h>
 
 #import "flutter/shell/platform/darwin/macos/framework/Headers/FlutterEngine.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMacOSExternalTexture.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterExternalTexture.h"
 
 /*
  * Delegate methods for FlutterTextureRegistrar.
@@ -15,7 +18,7 @@
 /*
  * Called by the FlutterTextureRegistrar when a texture is registered.
  */
-- (nonnull id<FlutterMacOSExternalTexture>)onRegisterTexture:(nonnull id<FlutterTexture>)texture;
+- (nonnull FlutterExternalTexture*)onRegisterTexture:(nonnull id<FlutterTexture>)texture;
 
 @end
 
@@ -43,6 +46,8 @@
 /*
  * Returns the registered texture with the provided `textureID`.
  */
-- (nullable id<FlutterMacOSExternalTexture>)getTextureWithID:(int64_t)textureID;
+- (nullable FlutterExternalTexture*)getTextureWithID:(int64_t)textureID;
 
 @end
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERTEXTUREREGISTRAR_H_

@@ -14,10 +14,6 @@
 #include "third_party/skia/include/core/SkShader.h"
 #include "third_party/tonic/typed_data/typed_list.h"
 
-namespace tonic {
-class DartLibraryNatives;
-}  // namespace tonic
-
 namespace flutter {
 
 class ImageShader : public Shader {
@@ -26,32 +22,28 @@ class ImageShader : public Shader {
 
  public:
   ~ImageShader() override;
-  static fml::RefPtr<ImageShader> Create();
+  static void Create(Dart_Handle wrapper);
 
-  void initWithImage(CanvasImage* image,
-                     SkTileMode tmx,
-                     SkTileMode tmy,
-                     int filter_quality_index,
-                     const tonic::Float64List& matrix4);
+  Dart_Handle initWithImage(CanvasImage* image,
+                            DlTileMode tmx,
+                            DlTileMode tmy,
+                            int filter_quality_index,
+                            Dart_Handle matrix_handle);
 
-  sk_sp<SkShader> shader(SkSamplingOptions) override;
-
-  static void RegisterNatives(tonic::DartLibraryNatives* natives);
+  std::shared_ptr<DlColorSource> shader(DlImageSampling) override;
 
   int width();
   int height();
 
+  void dispose();
+
  private:
   ImageShader();
 
-  flutter::SkiaGPUObject<SkImage> sk_image_;
-  SkTileMode tmx_;
-  SkTileMode tmy_;
-  SkMatrix local_matrix_;
+  sk_sp<const DlImage> image_;
   bool sampling_is_locked_;
 
-  SkSamplingOptions cached_sampling_;
-  flutter::SkiaGPUObject<SkShader> cached_shader_;
+  std::shared_ptr<DlColorSource> cached_shader_;
 };
 
 }  // namespace flutter

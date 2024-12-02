@@ -14,7 +14,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -22,18 +21,17 @@ import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.AssetManager;
 import android.os.Bundle;
 import androidx.annotation.NonNull;
+import androidx.test.core.app.ApplicationProvider;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import io.flutter.embedding.engine.FlutterJNI;
 import io.flutter.embedding.engine.loader.ApplicationInfoLoader;
 import java.io.File;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 @Config(manifest = Config.NONE)
-@RunWith(RobolectricTestRunner.class)
-@TargetApi(21)
+@RunWith(AndroidJUnit4.class)
 public class PlayStoreDeferredComponentManagerTest {
   private class TestFlutterJNI extends FlutterJNI {
     public int loadDartDeferredLibraryCalled = 0;
@@ -83,8 +81,10 @@ public class PlayStoreDeferredComponentManagerTest {
     }
   }
 
+  @SuppressWarnings("deprecation")
+  // getApplicationInfo
   private Context createSpyContext(Bundle metadata) throws NameNotFoundException {
-    Context spyContext = spy(RuntimeEnvironment.application);
+    Context spyContext = spy(ApplicationProvider.getApplicationContext());
     doReturn(spyContext).when(spyContext).createPackageContext(any(), anyInt());
     if (metadata == null) {
       metadata = new Bundle();

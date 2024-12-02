@@ -7,6 +7,9 @@
 #include <fuchsia/scenic/scheduling/cpp/fidl.h>
 #include <fuchsia/ui/composition/cpp/fidl.h>
 #include <lib/async-testing/test_loop.h>
+#include <lib/async/cpp/task.h>
+#include <zircon/rights.h>
+#include <zircon/types.h>
 
 #include <string>
 #include <vector>
@@ -30,13 +33,38 @@ void AwaitVsyncChecked(FlatlandConnection& flatland_connection,
                        bool& condition_variable,
                        fml::TimeDelta expected_frame_delta) {
   flatland_connection.AwaitVsync(
-      [&condition_variable,
-       expected_frame_delta = std::move(expected_frame_delta)](
-          fml::TimePoint frame_start, fml::TimePoint frame_end) {
+      [&condition_variable, expected_frame_delta](fml::TimePoint frame_start,
+                                                  fml::TimePoint frame_end) {
         EXPECT_EQ(frame_end.ToEpochDelta() - frame_start.ToEpochDelta(),
                   expected_frame_delta);
         condition_variable = true;
       });
+}
+
+void AwaitVsyncChecked(FlatlandConnection& flatland_connection,
+                       bool& condition_variable,
+                       fml::TimePoint expected_frame_end) {
+  flatland_connection.AwaitVsync(
+      [&condition_variable, expected_frame_end](fml::TimePoint frame_start,
+                                                fml::TimePoint frame_end) {
+        EXPECT_EQ(frame_end, expected_frame_end);
+        condition_variable = true;
+      });
+}
+
+std::vector<fuchsia::scenic::scheduling::PresentationInfo>
+CreateFuturePresentationInfos(const fml::TimePoint& presentation_time_1,
+                              const fml::TimePoint& presentation_time_2) {
+  fuchsia::scenic::scheduling::PresentationInfo info_1;
+  info_1.set_presentation_time(
+      presentation_time_1.ToEpochDelta().ToNanoseconds());
+  std::vector<fuchsia::scenic::scheduling::PresentationInfo> infos;
+  infos.push_back(std::move(info_1));
+  fuchsia::scenic::scheduling::PresentationInfo info_2;
+  info_2.set_presentation_time(
+      presentation_time_2.ToEpochDelta().ToNanoseconds());
+  infos.push_back(std::move(info_2));
+  return infos;
 }
 
 }  // namespace
@@ -51,6 +79,10 @@ class FlatlandConnectionTest : public ::testing::Test {
 
   async::TestLoop& loop() { return loop_; }
 
+  async_dispatcher_t* subloop_dispatcher() {
+    return session_subloop_->dispatcher();
+  }
+
   FakeFlatland& fake_flatland() { return fake_flatland_; }
 
   fidl::InterfaceHandle<fuchsia::ui::composition::Flatland>
@@ -60,12 +92,24 @@ class FlatlandConnectionTest : public ::testing::Test {
   }
 
   // Syntactic sugar for OnNextFrameBegin
-  void OnNextFrameBegin(int num_present_credits) {
+  void OnNextFrameBegin(int num_present_credits,
+                        const fml::TimePoint& presentation_time_1,
+                        const fml::TimePoint& presentation_time_2) {
     fuchsia::ui::composition::OnNextFrameBeginValues on_next_frame_begin_values;
     on_next_frame_begin_values.set_additional_present_credits(
         num_present_credits);
+    on_next_frame_begin_values.set_future_presentation_infos(
+        CreateFuturePresentationInfos(presentation_time_1,
+                                      presentation_time_2));
     fake_flatland().FireOnNextFrameBeginEvent(
         std::move(on_next_frame_begin_values));
+  }
+  void OnNextFrameBegin(int num_present_credits) {
+    const auto now = fml::TimePoint::Now();
+    const auto kPresentationTime1 = now + fml::TimeDelta::FromSeconds(100);
+    const auto kPresentationTime2 = now + fml::TimeDelta::FromSeconds(200);
+    OnNextFrameBegin(num_present_credits, kPresentationTime1,
+                     kPresentationTime2);
   }
 
  private:
@@ -83,13 +127,13 @@ TEST_F(FlatlandConnectionTest, Initialization) {
   const std::string debug_name = GetCurrentTestName();
   flutter_runner::FlatlandConnection flatland_connection(
       debug_name, TakeFlatlandHandle(), []() { FAIL(); },
-      [](auto...) { FAIL(); }, 1, fml::TimeDelta::Zero());
+      [](auto...) { FAIL(); }, loop().dispatcher());
   EXPECT_EQ(fake_flatland().debug_name(), "");
 
-  // Simulate an AwaitVsync that comes immediately.
+  // Simulate an AwaitVsync that returns immediately.
   bool await_vsync_fired = false;
   AwaitVsyncChecked(flatland_connection, await_vsync_fired,
-                    kDefaultFlatlandPresentationInterval);
+                    kInitialFlatlandVsyncOffset);
   EXPECT_TRUE(await_vsync_fired);
 
   // Ensure the debug name is set.
@@ -106,7 +150,7 @@ TEST_F(FlatlandConnectionTest, FlatlandDisconnect) {
   // completed yet.
   flutter_runner::FlatlandConnection flatland_connection(
       GetCurrentTestName(), TakeFlatlandHandle(), std::move(on_session_error),
-      [](auto...) { FAIL(); }, 1, fml::TimeDelta::Zero());
+      [](auto...) { FAIL(); }, loop().dispatcher());
   EXPECT_FALSE(error_fired);
 
   // Simulate a flatland disconnection, then Pump the loop.  The error callback
@@ -140,7 +184,7 @@ TEST_F(FlatlandConnectionTest, BasicPresent) {
   // completed yet.
   flutter_runner::FlatlandConnection flatland_connection(
       GetCurrentTestName(), TakeFlatlandHandle(), []() { FAIL(); },
-      std::move(on_frame_presented), 1, fml::TimeDelta::Zero());
+      std::move(on_frame_presented), loop().dispatcher());
   EXPECT_EQ(presents_called, 0u);
   EXPECT_EQ(vsyncs_handled, 0u);
 
@@ -152,14 +196,14 @@ TEST_F(FlatlandConnectionTest, BasicPresent) {
   // Simulate an AwaitVsync that comes after the first call.
   bool await_vsync_fired = false;
   AwaitVsyncChecked(flatland_connection, await_vsync_fired,
-                    kDefaultFlatlandPresentationInterval);
+                    kInitialFlatlandVsyncOffset);
   EXPECT_TRUE(await_vsync_fired);
 
   // Call Present and Pump the loop; `Present` and its callback is called. No
   // release fence should be queued.
   await_vsync_fired = false;
   zx::event first_release_fence;
-  zx::event::create(0, &first_release_fence);
+  zx::event::create(0u, &first_release_fence);
   const zx_handle_t first_release_fence_handle = first_release_fence.get();
   flatland_connection.EnqueueReleaseFence(std::move(first_release_fence));
   flatland_connection.Present();
@@ -170,13 +214,17 @@ TEST_F(FlatlandConnectionTest, BasicPresent) {
   EXPECT_FALSE(await_vsync_fired);
 
   // Fire the `OnNextFrameBegin` event. AwaitVsync should be fired.
-  AwaitVsyncChecked(flatland_connection, await_vsync_fired,
-                    kDefaultFlatlandPresentationInterval);
+  const auto now = fml::TimePoint::Now();
+  const auto kPresentationTime1 = now + fml::TimeDelta::FromSeconds(100);
+  const auto kPresentationTime2 = now + fml::TimeDelta::FromSeconds(200);
   fuchsia::ui::composition::OnNextFrameBeginValues on_next_frame_begin_values;
   on_next_frame_begin_values.set_additional_present_credits(3);
+  on_next_frame_begin_values.set_future_presentation_infos(
+      CreateFuturePresentationInfos(kPresentationTime1, kPresentationTime2));
   fake_flatland().FireOnNextFrameBeginEvent(
       std::move(on_next_frame_begin_values));
   loop().RunUntilIdle();
+  AwaitVsyncChecked(flatland_connection, await_vsync_fired, kPresentationTime1);
   EXPECT_TRUE(await_vsync_fired);
 
   // Fire the `OnFramePresented` event associated with the first `Present`,
@@ -192,19 +240,51 @@ TEST_F(FlatlandConnectionTest, BasicPresent) {
   loop().RunUntilIdle();
   EXPECT_EQ(presents_called, 2u);
   EXPECT_EQ(release_fence_handle, first_release_fence_handle);
+
+  // AwaitVsync should be fired with the second present.
+  await_vsync_fired = false;
+  AwaitVsyncChecked(flatland_connection, await_vsync_fired, kPresentationTime2);
+  EXPECT_TRUE(await_vsync_fired);
 }
 
-TEST_F(FlatlandConnectionTest, OutOfOrderAwait) {
+TEST_F(FlatlandConnectionTest, AwaitVsyncsBeforeOnNextFrameBegin) {
   // Set up callbacks which allow sensing of how many presents were handled.
   size_t presents_called = 0u;
-  zx_handle_t release_fence_handle;
-  fake_flatland().SetPresentHandler([&presents_called,
-                                     &release_fence_handle](auto present_args) {
-    presents_called++;
-    release_fence_handle = present_args.release_fences().empty()
-                               ? ZX_HANDLE_INVALID
-                               : present_args.release_fences().front().get();
-  });
+  fake_flatland().SetPresentHandler(
+      [&presents_called](auto present_args) { presents_called++; });
+
+  // Create the FlatlandConnection but don't pump the loop.  No FIDL calls are
+  // completed yet.
+  flutter_runner::FlatlandConnection flatland_connection(
+      GetCurrentTestName(), TakeFlatlandHandle(), []() { FAIL(); },
+      [](auto...) {}, loop().dispatcher());
+  EXPECT_EQ(presents_called, 0u);
+
+  // Pump the loop. Nothing is called.
+  loop().RunUntilIdle();
+  EXPECT_EQ(presents_called, 0u);
+
+  // Simulate an AwaitVsync that comes before the first Present.
+  bool await_vsync_callback_fired = false;
+  AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
+                    kInitialFlatlandVsyncOffset);
+  EXPECT_TRUE(await_vsync_callback_fired);
+
+  // AwaitVsync that comes before the first Present.
+  bool await_vsync_secondary_callback_fired = false;
+  flatland_connection.AwaitVsyncForSecondaryCallback(
+      [&await_vsync_secondary_callback_fired](fml::TimePoint frame_start,
+                                              fml::TimePoint frame_end) {
+        await_vsync_secondary_callback_fired = true;
+      });
+  EXPECT_TRUE(await_vsync_secondary_callback_fired);
+}
+
+TEST_F(FlatlandConnectionTest, RunsOutOfFuturePresentationInfos) {
+  // Set up callbacks which allow sensing of how many presents were handled.
+  size_t presents_called = 0u;
+  fake_flatland().SetPresentHandler(
+      [&presents_called](auto present_args) { presents_called++; });
 
   // Set up a callback which allows sensing of how many vsync's
   // (`OnFramePresented` events) were handled.
@@ -217,7 +297,7 @@ TEST_F(FlatlandConnectionTest, OutOfOrderAwait) {
   // completed yet.
   flutter_runner::FlatlandConnection flatland_connection(
       GetCurrentTestName(), TakeFlatlandHandle(), []() { FAIL(); },
-      std::move(on_frame_presented), 1, fml::TimeDelta::Zero());
+      std::move(on_frame_presented), loop().dispatcher());
   EXPECT_EQ(presents_called, 0u);
   EXPECT_EQ(vsyncs_handled, 0u);
 
@@ -226,48 +306,41 @@ TEST_F(FlatlandConnectionTest, OutOfOrderAwait) {
   EXPECT_EQ(presents_called, 0u);
   EXPECT_EQ(vsyncs_handled, 0u);
 
-  // Simulate an AwaitVsync that comes after the first call.
+  // Simulate an AwaitVsync that comes before the first Present.
   bool await_vsync_callback_fired = false;
   AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
-                    kDefaultFlatlandPresentationInterval);
+                    kInitialFlatlandVsyncOffset);
   EXPECT_TRUE(await_vsync_callback_fired);
 
-  // Set the callback with AwaitVsync, callback should not be fired
-  await_vsync_callback_fired = false;
-  AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
-                    kDefaultFlatlandPresentationInterval);
-  EXPECT_FALSE(await_vsync_callback_fired);
-
-  // Fire the `OnNextFrameBegin` event. AwaitVsync callback should be fired.
-  await_vsync_callback_fired = false;
-  OnNextFrameBegin(1);
+  // Queue Present.
+  flatland_connection.Present();
   loop().RunUntilIdle();
+  EXPECT_EQ(presents_called, 1u);
+
+  // Fire the `OnNextFrameBegin` event. AwaitVsync callback should be fired with
+  // the first presentation time.
+  await_vsync_callback_fired = false;
+  const auto kPresentationTime1 =
+      fml::TimePoint::Now() + fml::TimeDelta::FromSeconds(123);
+  const auto kVsyncInterval = fml::TimeDelta::FromSeconds(234);
+  const auto kPresentationTime2 = kPresentationTime1 + kVsyncInterval;
+  OnNextFrameBegin(1, kPresentationTime1, kPresentationTime2);
+  loop().RunUntilIdle();
+  AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
+                    kPresentationTime1);
   EXPECT_TRUE(await_vsync_callback_fired);
 
-  // Second consecutive ONFB should not call the fire callback and should
-  // instead set it to be pending to fire on next AwaitVsync
-  await_vsync_callback_fired = false;
-  OnNextFrameBegin(1);
-  loop().RunUntilIdle();
-  EXPECT_FALSE(await_vsync_callback_fired);
-
-  // Now an AwaitVsync should immediately fire the pending callback
+  // Second consecutive AwaitVsync callback should be fired with
+  // the second presentation time.
   await_vsync_callback_fired = false;
   AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
-                    kDefaultFlatlandPresentationInterval);
+                    kPresentationTime2);
   EXPECT_TRUE(await_vsync_callback_fired);
 
-  // With the pending callback fired, The new callback should be set for the
-  // next OnNextFrameBegin to call
+  // Another AwaitVsync callback should be fired with vsync_interval.
   await_vsync_callback_fired = false;
   AwaitVsyncChecked(flatland_connection, await_vsync_callback_fired,
-                    kDefaultFlatlandPresentationInterval);
-  EXPECT_FALSE(await_vsync_callback_fired);
-
-  // Now OnNextFrameBegin should fire the callback
-  await_vsync_callback_fired = false;
-  OnNextFrameBegin(1);
-  loop().RunUntilIdle();
+                    kPresentationTime2 + kVsyncInterval);
   EXPECT_TRUE(await_vsync_callback_fired);
 }
 
@@ -297,14 +370,14 @@ TEST_F(FlatlandConnectionTest, PresentCreditExhaustion) {
   on_frame_presented_event on_frame_presented = [](auto...) {};
   flutter_runner::FlatlandConnection flatland_connection(
       GetCurrentTestName(), TakeFlatlandHandle(), []() { FAIL(); },
-      std::move(on_frame_presented), 1, fml::TimeDelta::Zero());
+      std::move(on_frame_presented), loop().dispatcher());
   EXPECT_EQ(num_presents_called, 0u);
 
   // Pump the loop. Nothing is called.
   loop().RunUntilIdle();
   EXPECT_EQ(num_presents_called, 0u);
 
-  // Simulate an AwaitVsync that comes after the first call.
+  // Simulate an AwaitVsync that comes before the first Present.
   flatland_connection.AwaitVsync([](fml::TimePoint, fml::TimePoint) {});
   loop().RunUntilIdle();
   EXPECT_EQ(num_presents_called, 0u);
@@ -312,27 +385,24 @@ TEST_F(FlatlandConnectionTest, PresentCreditExhaustion) {
   // This test uses a fire callback that triggers Present() with a single
   // acquire and release fence in order to approximate the behavior of the real
   // flutter fire callback and let us drive presents with ONFBs
-  auto fire_callback = [&flatland_connection](fml::TimePoint frame_start,
-                                              fml::TimePoint frame_end) {
-    zx::event acquire_fence;
-    zx::event::create(0, &acquire_fence);
-    zx::event release_fence;
-    zx::event::create(0, &release_fence);
-    flatland_connection.EnqueueAcquireFence(std::move(acquire_fence));
-    flatland_connection.EnqueueReleaseFence(std::move(release_fence));
-    flatland_connection.Present();
+  auto fire_callback = [dispatcher = loop().dispatcher(), &flatland_connection](
+                           fml::TimePoint frame_start,
+                           fml::TimePoint frame_end) {
+    async::PostTask(dispatcher, [&flatland_connection]() {
+      zx::event acquire_fence;
+      zx::event::create(0u, &acquire_fence);
+      zx::event release_fence;
+      zx::event::create(0u, &release_fence);
+      flatland_connection.EnqueueAcquireFence(std::move(acquire_fence));
+      flatland_connection.EnqueueReleaseFence(std::move(release_fence));
+      flatland_connection.Present();
+    });
   };
 
-  // Call Await Vsync with a callback that triggers Present, but this should not
-  // present until ONFB is delivered below.
+  // Call Await Vsync with a callback that triggers Present and consumes the one
+  // and only present credit we start with.
   reset_test_counters();
   flatland_connection.AwaitVsync(fire_callback);
-  loop().RunUntilIdle();
-  EXPECT_EQ(num_presents_called, 0u);
-
-  // Call ONFB ands supply 0 present credits. This causes `Present` to be
-  // called and consumes the one and only present credit we start with.
-  OnNextFrameBegin(0);
   loop().RunUntilIdle();
   EXPECT_EQ(num_presents_called, 1u);
   EXPECT_EQ(num_acquire_fences, 1u);
@@ -416,6 +486,164 @@ TEST_F(FlatlandConnectionTest, PresentCreditExhaustion) {
   EXPECT_EQ(num_presents_called, 1u);
   EXPECT_EQ(num_acquire_fences, 1u);
   EXPECT_EQ(num_release_fences, num_onfb);
+}
+
+typedef struct {
+  std::shared_ptr<std::vector<zx::event>> fences;
+  std::shared_ptr<std::vector<zx::event>> fences_dup;
+} FencesPair;
+
+// Create two vectors of paired fences.
+FencesPair GetFencesPair(size_t num_fences) {
+  auto fences = std::make_shared<std::vector<zx::event>>();
+  auto fences_dup = std::make_shared<std::vector<zx::event>>();
+  for (size_t i = 0; i < num_fences; i++) {
+    zx::event fence;
+    auto status = zx::event::create(0u, &fence);
+    EXPECT_EQ(status, ZX_OK);
+
+    zx::event fence_dup;
+    status = fence.duplicate(ZX_RIGHT_SAME_RIGHTS, &fence_dup);
+    EXPECT_EQ(status, ZX_OK);
+
+    fences->push_back(std::move(fence));
+    fences_dup->push_back(std::move(fence_dup));
+  }
+  return FencesPair{
+      .fences = fences,
+      .fences_dup = fences_dup,
+  };
+}
+
+void SignalAll(std::vector<zx::event>* fences) {
+  for (auto& fence : *fences) {
+    const auto status = fence.signal(0, ZX_EVENT_SIGNALED);
+    ASSERT_EQ(status, ZX_OK);
+  }
+}
+
+void WaitAll(std::vector<zx::event>* fences) {
+  for (auto& fence : *fences) {
+    zx_signals_t ignored;
+    // Maybe the timeout here should be finite.
+    const auto status =
+        fence.wait_one(ZX_EVENT_SIGNALED, zx::time::infinite(), &ignored);
+    ASSERT_EQ(status, ZX_OK);
+  }
+}
+
+TEST_F(FlatlandConnectionTest, FenceStuffing) {
+  // Set up callbacks which allow sensing of how many presents were handled.
+  size_t num_presents_called = 0u;
+  size_t num_release_fences = 0u;
+  size_t num_acquire_fences = 0u;
+
+  auto reset_test_counters = [&num_presents_called, &num_acquire_fences,
+                              &num_release_fences]() {
+    num_presents_called = 0u;
+    num_release_fences = 0u;
+    num_acquire_fences = 0u;
+  };
+
+  fuchsia::ui::composition::PresentArgs last_present_args;
+  fake_flatland().SetPresentHandler(
+      [&num_presents_called, &num_acquire_fences, &num_release_fences,
+       &last_present_args](fuchsia::ui::composition::PresentArgs present_args) {
+        num_presents_called++;
+        num_acquire_fences = present_args.acquire_fences().size();
+        num_release_fences = present_args.release_fences().size();
+
+        last_present_args = std::move(present_args);
+      });
+
+  // Create the FlatlandConnection but don't pump the loop.  No FIDL calls are
+  // completed yet.
+  on_frame_presented_event on_frame_presented = [](auto...) {};
+  flutter_runner::FlatlandConnection flatland_connection(
+      GetCurrentTestName(), TakeFlatlandHandle(), []() { FAIL(); },
+      std::move(on_frame_presented), subloop_dispatcher());
+  EXPECT_EQ(num_presents_called, 0u);
+
+  // Pump the loop. Nothing is called.
+  loop().RunUntilIdle();
+  EXPECT_EQ(num_presents_called, 0u);
+
+  // Simulate an AwaitVsync that comes before the first Present.
+  flatland_connection.AwaitVsync([](fml::TimePoint, fml::TimePoint) {});
+  loop().RunUntilIdle();
+  EXPECT_EQ(num_presents_called, 0u);
+
+  constexpr size_t kMaxFences = 16;
+
+  // We must signal these.
+  FencesPair acquire = GetFencesPair(kMaxFences + 1);
+  // Flatland will signal these.
+  FencesPair release = GetFencesPair(kMaxFences + 1);
+
+  auto fire_callback = [dispatcher = loop().dispatcher(), &flatland_connection,
+                        rfd = release.fences_dup, afd = acquire.fences_dup](
+                           fml::TimePoint frame_start,
+                           fml::TimePoint frame_end) mutable {
+    async::PostTask(dispatcher, [&flatland_connection, rf = rfd, af = afd]() {
+      for (auto& fence : *rf) {
+        zx::event fence_dup;
+        const auto status = fence.duplicate(ZX_RIGHT_SAME_RIGHTS, &fence_dup);
+        ASSERT_EQ(status, ZX_OK);
+        flatland_connection.EnqueueReleaseFence(std::move(fence_dup));
+      }
+      for (auto& fence : *af) {
+        zx::event fence_dup;
+        const auto status = fence.duplicate(ZX_RIGHT_SAME_RIGHTS, &fence_dup);
+        ASSERT_EQ(status, ZX_OK);
+        flatland_connection.EnqueueAcquireFence(std::move(fence_dup));
+      }
+      flatland_connection.Present();
+    });
+  };
+
+  SignalAll(acquire.fences.get());
+
+  // Call Await Vsync with a callback that triggers Present and consumes the one
+  // and only present credit we start with.
+  reset_test_counters();
+  flatland_connection.AwaitVsync(fire_callback);
+
+  loop().RunUntilIdle();
+
+  EXPECT_EQ(num_presents_called, 1u);
+  EXPECT_EQ(num_acquire_fences, 16u);
+  EXPECT_EQ(num_release_fences, 0u);
+
+  // Move on to next present call. Reset all the expectations and callbacks.
+  reset_test_counters();
+  OnNextFrameBegin(1);
+  // Replenish present credits.
+  loop().RunUntilIdle();
+
+  flatland_connection.AwaitVsync([dispatcher = subloop_dispatcher(),
+                                  &flatland_connection](fml::TimePoint,
+                                                        fml::TimePoint) {
+    async::PostTask(dispatcher,
+                    [&flatland_connection] { flatland_connection.Present(); });
+  });
+  loop().RunUntilIdle();
+
+  // Simulate Flatland signaling all release fences. Note that the set of
+  // release fences here is only the first ~15 of the fences, the rest are
+  // released indirectly via the overflow mechanism.
+  SignalAll(last_present_args.mutable_release_fences());
+
+  loop().RunUntilIdle();
+
+  // At this point all release fences from prior frame should have been released
+  // by Flatland.
+  EXPECT_EQ(num_presents_called, 1u);
+  EXPECT_EQ(num_acquire_fences, 0u);
+  EXPECT_EQ(num_release_fences, 16u);
+
+  // Prove that all release fences have been signaled. If not, this will block
+  // forever.
+  WaitAll(release.fences.get());
 }
 
 }  // namespace flutter_runner::testing

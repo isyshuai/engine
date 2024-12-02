@@ -31,15 +31,10 @@ namespace txt {
 
 class ParagraphBuilder {
  public:
-  static std::unique_ptr<ParagraphBuilder> CreateTxtBuilder(
-      const ParagraphStyle& style,
-      std::shared_ptr<FontCollection> font_collection);
-
-#if FLUTTER_ENABLE_SKSHAPER
   static std::unique_ptr<ParagraphBuilder> CreateSkiaBuilder(
       const ParagraphStyle& style,
-      std::shared_ptr<FontCollection> font_collection);
-#endif
+      std::shared_ptr<FontCollection> font_collection,
+      const bool impeller_enabled);
 
   virtual ~ParagraphBuilder() = default;
 
@@ -64,8 +59,14 @@ class ParagraphBuilder {
   virtual const TextStyle& PeekStyle() = 0;
 
   // Adds text to the builder. Forms the proper runs to use the upper-most style
-  // on the style_stack_;
+  // on the style stack.
   virtual void AddText(const std::u16string& text) = 0;
+
+  // Adds text to the builder. Forms the proper runs to use the upper-most style
+  // on the style stack.
+  //
+  // Data must be in UTF-8 encoding.
+  virtual void AddText(const uint8_t* utf8_data, size_t byte_length) = 0;
 
   // Pushes the information required to leave an open space, where Flutter may
   // draw a custom placeholder into.

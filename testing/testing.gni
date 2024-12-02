@@ -3,16 +3,18 @@
 # found in the LICENSE file.
 
 import("//build/compiled_action.gni")
+import("//flutter/build/dart/rules.gni")
 import("//flutter/common/config.gni")
-import("//third_party/dart/build/dart/dart_action.gni")
-import("//third_party/dart/sdk_args.gni")
 
 is_aot_test =
     flutter_runtime_mode == "profile" || flutter_runtime_mode == "release"
 
-# Unit tests targets are only enabled for host machines and Fuchsia right now
+# Build unit tests when any of the following are true:
+# * host_toolchain: non-cross-compile, so we can run tests on the host.
+# * is_mac: arm64 builds can run x64 binaries.
+# * is_fuchsia: build unittests for testing on device.
 declare_args() {
-  enable_unittests = current_toolchain == host_toolchain || is_fuchsia
+  enable_unittests = current_toolchain == host_toolchain || is_fuchsia || is_mac
 }
 
 # Creates a translation unit that defines the flutter::testing::GetFixturesPath
@@ -27,11 +29,13 @@ template("fixtures_location") {
 
   location_path = rebase_path(invoker.assets_dir)
   testing_assets_path = rebase_path("$root_out_dir/gen/flutter/testing/assets")
+  source_path = rebase_path("//")
 
   # Array of source lines. We use a list to ensure a trailing newline is
   # emitted by write_file() to comply with -Wnewline-eof.
   location_source = [
     "namespace flutter { namespace testing { ",
+    "const char* GetSourcePath() {return \"$source_path\";} ",
     "const char* GetFixturesPath() {return \"$location_path\";} ",
     "const char* GetTestingAssetsPath() {return \"$testing_assets_path\";} ",
     "}}",
@@ -43,48 +47,6 @@ template("fixtures_location") {
   source_set(target_name) {
     public = []
     sources = [ location_source_path ]
-  }
-}
-
-# Invokes the frontend server using the built Dart SDK or the prebuilt Dart SDK
-# as appropriate.
-#
-# Parameters:
-#   The parameters testonly, deps, inputs, outputs, depfile, and args are
-#   forwarded from the invoker either to an 'action' target or a 'dart_action'
-#   target depending on whether a prebuilt Dart SDK is used or not,
-#   respectively.
-template("_frontend_server") {
-  if (flutter_prebuilt_dart_sdk) {
-    action(target_name) {
-      testonly = invoker.testonly
-      deps = invoker.deps
-      script = "//build/gn_run_binary.py"
-      inputs = invoker.inputs
-      outputs = invoker.outputs
-      depfile = invoker.depfile
-      pool = "//flutter/build/dart:dart_pool"
-
-      ext = ""
-      if (is_win) {
-        ext = ".exe"
-      }
-      dart = rebase_path("$host_prebuilt_dart_sdk/bin/dart$ext", root_out_dir)
-      frontend_server = rebase_path(
-              "$host_prebuilt_dart_sdk/bin/snapshots/frontend_server.dart.snapshot")
-
-      args = [
-               dart,
-               frontend_server,
-             ] + invoker.args
-    }
-  } else {
-    dart_action(target_name) {
-      forward_variables_from(invoker, "*")
-      deps += [ "//third_party/dart/utils/kernel-service:frontend_server" ]
-      script = "$root_out_dir/frontend_server.dart.snapshot"
-      pool = "//flutter/build/dart:dart_pool"
-    }
   }
 }
 
@@ -102,45 +64,26 @@ template("dart_snapshot_kernel") {
   assert(defined(invoker.dart_kernel),
          "The Dart Kernel file location must be specified")
 
-  _frontend_server(target_name) {
-    testonly = true
+  args = []
+  if (flutter_runtime_mode == "release" ||
+      flutter_runtime_mode == "jit_release") {
+    args += [ "-Ddart.vm.product=true" ]
+  }
 
-    deps = [ "//flutter/lib/snapshot:strong_platform" ]
+  if (is_aot_test) {
+    args += [
+      "--aot",
 
-    inputs = [ invoker.dart_main ]
-
-    outputs = [ invoker.dart_kernel ]
-
-    snapshot_depfile = "$target_gen_dir/snapshot_$target_name.depfile.d"
-    depfile = snapshot_depfile
-
-    args = [
-      "--sdk-root",
-      rebase_path("$root_out_dir/flutter_patched_sdk"),
-      "--target",
-      "flutter",
-      "--sound-null-safety",
-      "--output-dill",
-      rebase_path(invoker.dart_kernel, root_out_dir),
-      "--depfile",
-      rebase_path(snapshot_depfile),
+      # type flow analysis
+      "--tfa",
     ]
+  }
 
-    if (flutter_runtime_mode == "release" ||
-        flutter_runtime_mode == "jit_release") {
-      args += [ "-Ddart.vm.product=true" ]
-    }
-
-    if (is_aot_test) {
-      args += [
-        "--aot",
-
-        # type flow analysis
-        "--tfa",
-      ]
-    }
-
-    args += [ rebase_path(invoker.dart_main) ]
+  flutter_frontend_server(target_name) {
+    testonly = true
+    main_dart = invoker.dart_main
+    kernel_output = invoker.dart_kernel
+    extra_args = args
   }
 }
 
@@ -163,9 +106,9 @@ template("dart_snapshot_aot") {
   compiled_action(target_name) {
     testonly = true
 
-    tool = "//third_party/dart/runtime/bin:gen_snapshot"
+    tool = "$dart_src/runtime/bin:gen_snapshot"
 
-    pool = "//flutter/build/dart:dart_pool"
+    pool = "//build/toolchain:toolchain_pool"
 
     inputs = [ invoker.dart_kernel ]
 
@@ -177,7 +120,6 @@ template("dart_snapshot_aot") {
     outputs = [ elf_object ]
 
     args = [
-      "--lazy_async_stacks",
       "--deterministic",
       "--snapshot_kind=app-aot-elf",
       "--loading_unit_manifest=" + rebase_path(loading_unit_manifest),
@@ -245,10 +187,19 @@ template("dart_snapshot") {
 # Arguments:
 #
 #     fixtures (required): The list of fixtures to copy.
+#
+#     dest (optional): When specified, the fixtures are placed under an
+#                      'assets' subdirectory of this path rather than an
+#                      'assets' subdirectory of target_gen_dir.
 template("copy_fixtures") {
   testonly = true
 
   assert(defined(invoker.fixtures), "The test fixtures must be specified.")
+
+  dest = target_gen_dir
+  if (defined(invoker.dest)) {
+    dest = invoker.dest
+  }
 
   has_fixtures = false
   foreach(fixture, invoker.fixtures) {
@@ -258,7 +209,8 @@ template("copy_fixtures") {
   if (has_fixtures) {
     copy(target_name) {
       sources = invoker.fixtures
-      outputs = [ "$target_gen_dir/assets/{{source_file_part}}" ]
+      outputs = [ "$dest/assets/{{source_file_part}}" ]
+      forward_variables_from(invoker, [ "deps" ])
     }
   } else {
     group(target_name) {
@@ -287,8 +239,21 @@ template("copy_fixtures") {
 #     dart_main (optional): The path to the main Dart file. If specified, it is
 #                           snapshotted.
 #
-#     use_target_as_artifact_prefix(optional): If true, adds the target name as prefix of the kernel and AOT ELF snapshot filename.
+#     use_target_as_artifact_prefix(optional): If true, adds the target name as
+#         prefix of the kernel and AOT ELF snapshot filename.
+#
+#     dest (optional): When specified, the fixtures are placed under an
+#                      'assets' subdirectory of this path rather than an
+#                      'assets' subdirectory of target_gen_dir.
 template("test_fixtures") {
+  dest = target_gen_dir
+  if (defined(invoker.dest)) {
+    dest = invoker.dest
+  }
+
+  # Not all paths use 'dest'
+  not_needed([ "dest" ])
+
   # Even if no fixtures are present, the location of the fixtures directory
   # must always be known to tests.
   fixtures_location_target_name = "_fl_$target_name"
@@ -296,7 +261,7 @@ template("test_fixtures") {
     if (is_fuchsia) {
       assets_dir = "/pkg/data/assets"
     } else {
-      assets_dir = "$target_gen_dir/assets"
+      assets_dir = "$dest/assets"
     }
   }
   test_deps = [ ":$fixtures_location_target_name" ]
@@ -307,6 +272,8 @@ template("test_fixtures") {
     copy_fixtures_target_name = "_cf_$target_name"
     copy_fixtures(copy_fixtures_target_name) {
       fixtures = invoker.fixtures
+      dest = dest
+      forward_variables_from(invoker, [ "deps" ])
     }
     test_public_deps += [ ":$copy_fixtures_target_name" ]
   }

@@ -1,7 +1,9 @@
 #!/bin/bash
 
-set -e
+# TODO(matanlurey): Remove all references are gone and using run_ios_tests.dart.
+# See https://github.com/flutter/flutter/issues/143953 for tracking.
 
+set -e
 
 # Needed because if it is set, cd may print the path it changed to.
 unset CDPATH
@@ -24,22 +26,20 @@ function follow_links() (
   echo "$file"
 )
 
+function dart_bin() {
+  dart_path="$1/flutter/third_party/dart/tools/sdks/dart-sdk/bin"
+  if [[ ! -e "$dart_path" ]]; then
+    dart_path="$1/third_party/dart/tools/sdks/dart-sdk/bin"
+  fi
+  echo "$dart_path"
+}
+
 SCRIPT_DIR=$(follow_links "$(dirname -- "${BASH_SOURCE[0]}")")
 SRC_DIR="$(cd "$SCRIPT_DIR/../../.."; pwd -P)"
+DART_BIN=$(dart_bin "$SRC_DIR")
+DART="${DART_BIN}/dart"
 
-FLUTTER_ENGINE="ios_debug_sim_unopt"
-
-if [[ $# -eq 1 ]]; then
-  FLUTTER_ENGINE="$1"
-fi
-
-# Make sure simulators rotate automatically for "PlatformViewRotation" test.
-# Can also be set via Simulator app Device > Rotate Device Automatically
-defaults write com.apple.iphonesimulator RotateWindowWhenSignaledByGuest -int 1
-
-cd $SRC_DIR/out/$FLUTTER_ENGINE/scenario_app/Scenarios
-set -o pipefail && xcodebuild -sdk iphonesimulator \
-  -scheme Scenarios \
-  -destination 'platform=iOS Simulator,OS=13.0,name=iPhone 8' \
-  clean test \
-  FLUTTER_ENGINE="$FLUTTER_ENGINE"
+"$DART" \
+  --disable-dart-dev \
+  testing/scenario_app/bin/run_ios_tests.dart \
+  "$@"

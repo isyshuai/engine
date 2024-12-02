@@ -8,21 +8,21 @@
 #include <memory>
 #include <vector>
 
+#include "assets/native_assets.h"
+#include "flutter/assets/asset_manager.h"
 #include "flutter/common/task_runners.h"
-#include "flutter/flow/layers/layer_tree.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/mapping.h"
 #include "flutter/lib/ui/io_manager.h"
 #include "flutter/lib/ui/painting/image_generator_registry.h"
 #include "flutter/lib/ui/text/font_collection.h"
 #include "flutter/lib/ui/ui_dart_state.h"
-#include "flutter/lib/ui/volatile_path_tracker.h"
 #include "flutter/lib/ui/window/platform_configuration.h"
 #include "flutter/lib/ui/window/pointer_data_packet.h"
+#include "flutter/lib/ui/window/pointer_data_packet_converter.h"
 #include "flutter/runtime/dart_vm.h"
 #include "flutter/runtime/platform_data.h"
-#include "rapidjson/document.h"
-#include "rapidjson/stringbuffer.h"
+#include "flutter/runtime/platform_isolate_manager.h"
 
 namespace flutter {
 
@@ -41,8 +41,24 @@ class Window;
 /// used by the engine to copy the currently accumulated window state so it can
 /// be referenced by the new runtime controller.
 ///
-class RuntimeController : public PlatformConfigurationClient {
+/// When `RuntimeController` is created, it takes some time before the root
+/// isolate becomes ready. Operation during this gap is stored by
+/// `RuntimeController` and flushed to the Dart VM when the isolate becomes
+/// ready before the entrypoint function. See `PlatformData`.
+///
+class RuntimeController : public PlatformConfigurationClient,
+                          PointerDataPacketConverter::Delegate {
  public:
+  /// A callback that's invoked after this `RuntimeController` attempts to
+  /// add a view to the Dart isolate.
+  ///
+  /// If the Dart isolate is not launched yet, this callback will be stored
+  /// and invoked after the isolate is launched.
+  ///
+  /// The `added` parameter is false if the add operation fails or was
+  /// cancelled while pending using `RemoveView`.
+  using AddViewCallback = std::function<void(bool added)>;
+
   //----------------------------------------------------------------------------
   /// @brief      Creates a new instance of a runtime controller. This is
   ///             usually only done by the engine instance associated with the
@@ -97,14 +113,16 @@ class RuntimeController : public PlatformConfigurationClient {
   ///
   std::unique_ptr<RuntimeController> Spawn(
       RuntimeDelegate& p_client,
-      std::string advisory_script_uri,
-      std::string advisory_script_entrypoint,
+      const std::string& advisory_script_uri,
+      const std::string& advisory_script_entrypoint,
       const std::function<void(int64_t)>& idle_notification_callback,
       const fml::closure& isolate_create_callback,
       const fml::closure& isolate_shutdown_callback,
-      std::shared_ptr<const fml::Mapping> persistent_isolate_data,
+      const std::shared_ptr<const fml::Mapping>& persistent_isolate_data,
       fml::WeakPtr<IOManager> io_manager,
-      fml::WeakPtr<ImageDecoder> image_decoder) const;
+      fml::WeakPtr<ImageDecoder> image_decoder,
+      fml::WeakPtr<ImageGeneratorRegistry> image_generator_registry,
+      fml::TaskRunnerAffineWeakPtr<SnapshotDelegate> snapshot_delegate) const;
 
   // |PlatformConfigurationClient|
   ~RuntimeController() override;
@@ -143,11 +161,12 @@ class RuntimeController : public PlatformConfigurationClient {
   ///
   [[nodiscard]] bool LaunchRootIsolate(
       const Settings& settings,
-      fml::closure root_isolate_create_callback,
+      const fml::closure& root_isolate_create_callback,
       std::optional<std::string> dart_entrypoint,
       std::optional<std::string> dart_entrypoint_library,
       const std::vector<std::string>& dart_entrypoint_args,
-      std::unique_ptr<IsolateConfiguration> isolate_configuration);
+      std::unique_ptr<IsolateConfiguration> isolate_configuration,
+      std::shared_ptr<NativeAssetsManager> native_assets_manager);
 
   //----------------------------------------------------------------------------
   /// @brief      Clone the runtime controller. Launching an isolate with a
@@ -161,15 +180,69 @@ class RuntimeController : public PlatformConfigurationClient {
   std::unique_ptr<RuntimeController> Clone() const;
 
   //----------------------------------------------------------------------------
+  /// @brief      Notify the isolate that a new view is available.
+  ///
+  ///             A view must be added before other methods can refer to it,
+  ///             including the implicit view. Adding a view that already exists
+  ///             is an error.
+  ///
+  ///             The `callback` is invoked when the add operation is attempted,
+  ///             failed, or is cancelled.
+  ///
+  ///             If the isolate is not running, the view add will be queued and
+  ///             flushed to the isolate when it starts. Calling `RemoveView`
+  ///             before the isolate is launched cancels the add operation.
+  ///
+  ///             If the isolate is running, a frame will be scheduled.
+  ///
+  /// @param[in]  view_id           The ID of the new view.
+  /// @param[in]  viewport_metrics  The initial viewport metrics for the view.
+  /// @param[in]  callback          Callback that will be invoked after the add
+  ///                               operation is attempted or cancelled.
+  ///
+  void AddView(int64_t view_id,
+               const ViewportMetrics& view_metrics,
+               AddViewCallback callback);
+
+  //----------------------------------------------------------------------------
+  /// @brief      Notify the isolate that a view is no longer available.
+  ///
+  ///             Views that are added before the isolate is started are
+  ///             queued until the isolate is launched. If one of these
+  ///             "pending" views are removed, the view add is cancelled:
+  ///             the `AddViewCallback` will be invoked with an `added` of
+  ///             false and `RemoveView` will return false.
+  ///
+  ///             The implicit view (kFlutterImplicitViewId) should never be
+  ///             removed. Doing so triggers an assertion.
+  ///
+  /// @param[in]  view_id  The ID of the view.
+  ///
+  /// @return     If the remove view operation was forwarded to the running
+  ///             isolate. False if the view does not exist. If the Dart isolate
+  ///             is not running, then the pending view creation (if any) is
+  ///             cancelled and the return value is always false.
+  bool RemoveView(int64_t view_id);
+
+  //----------------------------------------------------------------------------
   /// @brief      Forward the specified viewport metrics to the running isolate.
   ///             If the isolate is not running, these metrics will be saved and
   ///             flushed to the isolate when it starts.
   ///
+  /// @param[in]  view_id  The ID for the view that `metrics` describes.
   /// @param[in]  metrics  The window's viewport metrics.
   ///
   /// @return     If the window metrics were forwarded to the running isolate.
   ///
-  bool SetViewportMetrics(const ViewportMetrics& metrics);
+  bool SetViewportMetrics(int64_t view_id, const ViewportMetrics& metrics);
+
+  //----------------------------------------------------------------------------
+  /// @brief      Forward the specified display metrics to the running isolate.
+  ///             If the isolate is not running, these metrics will be saved and
+  ///             flushed to the isolate when it starts.
+  ///
+  /// @param[in]  displays  The available displays.
+  bool SetDisplays(const std::vector<DisplayData>& displays);
 
   //----------------------------------------------------------------------------
   /// @brief      Forward the specified locale data to the running isolate. If
@@ -202,9 +275,11 @@ class RuntimeController : public PlatformConfigurationClient {
   bool SetUserSettingsData(const std::string& data);
 
   //----------------------------------------------------------------------------
-  /// @brief      Forward the lifecycle state data to the running isolate. If
-  ///             the isolate is not running, this data will be saved and
-  ///             flushed to the isolate when it starts running.
+  /// @brief      Forward the initial lifecycle state data to the running
+  ///             isolate. If the isolate is not running, this data will be
+  ///             saved and flushed to the isolate when it starts running.
+  ///             After the isolate starts running, the current lifecycle
+  ///             state is pushed to it via the "flutter/lifecycle" channel.
   ///
   /// @deprecated The persistent isolate data must be used for this purpose
   ///             instead.
@@ -214,7 +289,7 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @return     If the lifecycle state data was forwarded to the running
   ///             isolate.
   ///
-  bool SetLifecycleState(const std::string& data);
+  bool SetInitialLifecycleState(const std::string& data);
 
   //----------------------------------------------------------------------------
   /// @brief      Notifies the running isolate about whether the semantics tree
@@ -350,13 +425,23 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @bug        The `deadline` argument must be converted to `std::chrono`
   ///             instead of a raw integer.
   ///
-  /// @param[in]  deadline  The deadline measures in microseconds against the
-  ///             system's monotonic time. The clock can be accessed via
-  ///             `Dart_TimelineGetMicros`.
+  /// @param[in]  deadline  The deadline is used by the VM to determine if the
+  ///             corresponding sweep can be performed within the deadline.
   ///
   /// @return     If the idle notification was forwarded to the running isolate.
   ///
-  virtual bool NotifyIdle(int64_t deadline);
+  virtual bool NotifyIdle(fml::TimeDelta deadline);
+
+  //----------------------------------------------------------------------------
+  /// @brief      Notify the Dart VM that the attached flutter view has been
+  ///             destroyed. This gives the Dart VM to perform some cleanup
+  ///             activities e.g: perform garbage collection to free up any
+  ///             unused memory.
+  ///
+  /// NotifyDestroyed is advisory. The VM may or may not perform any clean up
+  /// activities.
+  ///
+  virtual bool NotifyDestroyed();
 
   //----------------------------------------------------------------------------
   /// @brief      Returns if the root isolate is running. The isolate must be
@@ -365,7 +450,7 @@ class RuntimeController : public PlatformConfigurationClient {
   ///
   /// @return     True if root isolate running, False otherwise.
   ///
-  virtual bool IsRootIsolateRunning();
+  virtual bool IsRootIsolateRunning() const;
 
   //----------------------------------------------------------------------------
   /// @brief      Dispatch the specified platform message to running root
@@ -394,7 +479,7 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @brief      Dispatch the semantics action to the specified accessibility
   ///             node.
   ///
-  /// @param[in]  id      The identified of the accessibility node.
+  /// @param[in]  node_id The identified of the accessibility node.
   /// @param[in]  action  The semantics action to perform on the specified
   ///                     accessibility node.
   /// @param[in]  args    Optional data that applies to the specified action.
@@ -402,7 +487,7 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @return     If the semantics action was dispatched. This may fail if an
   ///             isolate is not running.
   ///
-  bool DispatchSemanticsAction(int32_t id,
+  bool DispatchSemanticsAction(int32_t node_id,
                                SemanticsAction action,
                                fml::MallocMapping args);
 
@@ -438,6 +523,15 @@ class RuntimeController : public PlatformConfigurationClient {
   bool HasLivePorts();
 
   //----------------------------------------------------------------------------
+  /// @brief      Returns if the root isolate has any pending microtasks.
+  ///
+  /// @return     True if there are microtasks that have been queued but not
+  ///             run, False otherwise. Return False if the root isolate is not
+  ///             running as well.
+  ///
+  bool HasPendingMicrotasks();
+
+  //----------------------------------------------------------------------------
   /// @brief      Get the last error encountered by the microtask queue.
   ///
   /// @return     The last error encountered by the microtask queue.
@@ -464,7 +558,7 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @brief      Get an identifier that represents the Dart isolate group the
   ///             root isolate is in.
   ///
-  /// @return     The root isolate isolate group identifier, zero if one can't
+  /// @return     The root isolate group identifier, zero if one can't
   ///             be established.
   uint64_t GetRootIsolateGroup() const;
 
@@ -522,7 +616,7 @@ class RuntimeController : public PlatformConfigurationClient {
   ///                              temporary conditions such as no network.
   ///                              Transient errors allow the dart VM to
   ///                              re-request the same deferred library and
-  ///                              and loading_unit_id again. Non-transient
+  ///                              loading_unit_id again. Non-transient
   ///                              errors are permanent and attempts to
   ///                              re-request the library will instantly
   ///                              complete with an error.
@@ -532,6 +626,10 @@ class RuntimeController : public PlatformConfigurationClient {
 
   // |PlatformConfigurationClient|
   void RequestDartDeferredLibrary(intptr_t loading_unit_id) override;
+
+  // |PlatformConfigurationClient|
+  std::shared_ptr<const fml::Mapping> GetPersistentIsolateData() override;
+
   const fml::WeakPtr<IOManager>& GetIOManager() const {
     return context_.io_manager;
   }
@@ -548,13 +646,28 @@ class RuntimeController : public PlatformConfigurationClient {
     return context_.unref_queue;
   }
 
-  const fml::WeakPtr<SnapshotDelegate>& GetSnapshotDelegate() const {
+  const fml::TaskRunnerAffineWeakPtr<SnapshotDelegate>& GetSnapshotDelegate()
+      const {
     return context_.snapshot_delegate;
   }
 
+  std::weak_ptr<const DartIsolate> GetRootIsolate() const {
+    return root_isolate_;
+  }
+
+  std::shared_ptr<PlatformIsolateManager> GetPlatformIsolateManager() override {
+    return platform_isolate_manager_;
+  }
+
+  //--------------------------------------------------------------------------
+  /// @brief      Shuts down all registered platform isolates. Must be called
+  ///             from the platform thread.
+  ///
+  void ShutdownPlatformIsolates();
+
  protected:
   /// Constructor for Mocks.
-  RuntimeController(RuntimeDelegate& p_client, TaskRunners task_runners);
+  RuntimeController(RuntimeDelegate& p_client, const TaskRunners& task_runners);
 
  private:
   struct Locale {
@@ -583,10 +696,43 @@ class RuntimeController : public PlatformConfigurationClient {
   const fml::closure isolate_shutdown_callback_;
   std::shared_ptr<const fml::Mapping> persistent_isolate_data_;
   UIDartState::Context context_;
+  PointerDataPacketConverter pointer_data_packet_converter_;
+  std::shared_ptr<PlatformIsolateManager> platform_isolate_manager_ =
+      std::shared_ptr<PlatformIsolateManager>(new PlatformIsolateManager());
+  bool has_flushed_runtime_state_ = false;
+
+  // Callbacks when `AddView` was called before the Dart isolate is launched.
+  //
+  // These views will be added when `FlushRuntimeStateToIsolate` is called.
+  // This is no longer used once the Dart isolate starts.
+  std::unordered_map<int64_t, AddViewCallback> pending_add_view_callbacks_;
+
+  // Tracks the views that have been called `Render` during a frame.
+  //
+  // If all views that have been registered by `AddView` have been called
+  // `Render`, then the runtime controller notifies the client of the end of
+  // frame immediately, allowing the client to submit the views to the pipeline
+  // a bit earlier than having to wait for the end of `BeginFrame`. See also
+  // `Animator::OnAllViewsRendered`.
+  //
+  // This mechanism fixes https://github.com/flutter/flutter/issues/144584 with
+  // option 2 and
+  // https://github.com/flutter/engine/pull/51186#issuecomment-1977820525 with
+  // option a in most cases, except if there are multiple views and only part of
+  // them are rendered.
+  // TODO(dkwingsmt): Fix these problems for all cases.
+  std::unordered_set<uint64_t> rendered_views_during_frame_;
+
+  void MarkAsFrameBorder();
+
+  void CheckIfAllViewsRendered();
 
   PlatformConfiguration* GetPlatformConfigurationIfAvailable();
 
   bool FlushRuntimeStateToIsolate();
+
+  // |PointerDataPacketConverter::Delegate|
+  bool ViewExists(int64_t view_id) const override;
 
   // |PlatformConfigurationClient|
   std::string DefaultRouteName() override;
@@ -595,7 +741,13 @@ class RuntimeController : public PlatformConfigurationClient {
   void ScheduleFrame() override;
 
   // |PlatformConfigurationClient|
-  void Render(Scene* scene) override;
+  void EndWarmUpFrame() override;
+
+  // |PlatformConfigurationClient|
+  void Render(int64_t view_id,
+              Scene* scene,
+              double width,
+              double height) override;
 
   // |PlatformConfigurationClient|
   void UpdateSemantics(SemanticsUpdate* update) override;
@@ -607,6 +759,9 @@ class RuntimeController : public PlatformConfigurationClient {
   FontCollection& GetFontCollection() override;
 
   // |PlatformConfigurationClient|
+  std::shared_ptr<AssetManager> GetAssetManager() override;
+
+  // |PlatformConfigurationClient|
   void UpdateIsolateDescription(const std::string isolate_name,
                                 int64_t isolate_port) override;
 
@@ -614,11 +769,15 @@ class RuntimeController : public PlatformConfigurationClient {
   void SetNeedsReportTimings(bool value) override;
 
   // |PlatformConfigurationClient|
-  std::shared_ptr<const fml::Mapping> GetPersistentIsolateData() override;
-
-  // |PlatformConfigurationClient|
   std::unique_ptr<std::vector<std::string>> ComputePlatformResolvedLocale(
       const std::vector<std::string>& supported_locale_data) override;
+
+  // |PlatformConfigurationClient|
+  void SendChannelUpdate(std::string name, bool listening) override;
+
+  // |PlatformConfigurationClient|
+  double GetScaledFontSize(double unscaled_font_size,
+                           int configuration_id) const override;
 
   FML_DISALLOW_COPY_AND_ASSIGN(RuntimeController);
 };

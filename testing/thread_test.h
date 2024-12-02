@@ -14,8 +14,7 @@
 #include "flutter/fml/thread.h"
 #include "gtest/gtest.h"
 
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
 
 //------------------------------------------------------------------------------
 /// @brief      A fixture that creates threads with running message loops that
@@ -56,7 +55,7 @@ class ThreadTest : public ::testing::Test {
   ///
   /// @return     The task runner for the newly created thread.
   ///
-  fml::RefPtr<fml::TaskRunner> CreateNewThread(std::string name = "");
+  fml::RefPtr<fml::TaskRunner> CreateNewThread(const std::string& name = "");
 
  private:
   fml::RefPtr<fml::TaskRunner> current_task_runner_;
@@ -65,7 +64,6 @@ class ThreadTest : public ::testing::Test {
   FML_DISALLOW_COPY_AND_ASSIGN(ThreadTest);
 };
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing
 
 #endif  // FLUTTER_TESTING_THREAD_TEST_H_

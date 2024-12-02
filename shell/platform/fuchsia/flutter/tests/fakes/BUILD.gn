@@ -4,11 +4,14 @@
 
 assert(is_fuchsia)
 
+import("//flutter/tools/fuchsia/gn-sdk/src/gn_configs.gni")
+
 group("fakes") {
   testonly = true
 
   public_deps = [
     ":focus",
+    ":pointer",
     "scenic",
   ]
 }
@@ -24,9 +27,22 @@ source_set("focus") {
   ]
 
   deps = [
-    "//build/fuchsia/pkg:sys_cpp_testing",
+    "${fuchsia_sdk}/pkg/sys_cpp_testing",
     "//flutter/lib/ui",
     "//flutter/testing",
-    "//third_party/rapidjson",
+    "//flutter/third_party/rapidjson",
+  ]
+}
+
+source_set("pointer") {
+  testonly = true
+
+  sources = [ "mock_injector_registry.h" ]
+
+  deps = [
+    "${fuchsia_sdk}/pkg/sys_cpp_testing",
+    "//flutter/lib/ui",
+    "//flutter/testing",
+    "//flutter/third_party/rapidjson",
   ]
 }

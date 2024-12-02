@@ -6,6 +6,7 @@
 
 #include "flutter/fml/logging.h"
 #include "flutter/shell/platform/embedder/tests/embedder_assertions.h"
+#include "flutter/shell/platform/embedder/tests/embedder_test_backingstore_producer_software.h"
 #include "third_party/skia/include/core/SkSurface.h"
 
 namespace flutter {
@@ -17,6 +18,27 @@ EmbedderTestCompositorSoftware::EmbedderTestCompositorSoftware(
 
 EmbedderTestCompositorSoftware::~EmbedderTestCompositorSoftware() = default;
 
+void EmbedderTestCompositorSoftware::SetRenderTargetType(
+    EmbedderTestBackingStoreProducer::RenderTargetType type,
+    FlutterSoftwarePixelFormat software_pixfmt) {
+  switch (type) {
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kSoftwareBuffer:
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kSoftwareBuffer2:
+      backingstore_producer_ =
+          std::make_unique<EmbedderTestBackingStoreProducerSoftware>(
+              context_, type, software_pixfmt);
+      return;
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kMetalTexture:
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kOpenGLFramebuffer:
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kOpenGLSurface:
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kOpenGLTexture:
+    case EmbedderTestBackingStoreProducer::RenderTargetType::kVulkanImage:
+      FML_LOG(FATAL) << "Unsupported render target type: "
+                     << static_cast<int>(type);
+      return;
+  }
+}
+
 bool EmbedderTestCompositorSoftware::UpdateOffscrenComposition(
     const FlutterLayer** layers,
     size_t layers_count) {
@@ -24,7 +46,7 @@ bool EmbedderTestCompositorSoftware::UpdateOffscrenComposition(
 
   const auto image_info = SkImageInfo::MakeN32Premul(surface_size_);
 
-  auto surface = SkSurface::MakeRaster(image_info);
+  auto surface = SkSurfaces::Raster(image_info);
 
   if (!surface) {
     FML_LOG(ERROR) << "Could not update the off-screen composition.";
@@ -46,12 +68,11 @@ bool EmbedderTestCompositorSoftware::UpdateOffscrenComposition(
     SkIPoint canvas_offset = SkIPoint::Make(0, 0);
 
     switch (layer->type) {
-      case kFlutterLayerContentTypeBackingStore:
+      case kFlutterLayerContentTypeBackingStore: {
         layer_image =
-            reinterpret_cast<SkSurface*>(layer->backing_store->user_data)
-                ->makeImageSnapshot();
-
+            backingstore_producer_->MakeImageSnapshot(layer->backing_store);
         break;
+      }
       case kFlutterLayerContentTypePlatformView:
         layer_image = platform_view_renderer_callback_
                           ? platform_view_renderer_callback_(*layer, nullptr)

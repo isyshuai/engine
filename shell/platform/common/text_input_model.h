@@ -20,22 +20,33 @@ class TextInputModel {
   TextInputModel();
   virtual ~TextInputModel();
 
-  // Sets the text.
+  // Sets the text, as well as the selection and the composing region.
   //
-  // Resets the selection base and extent.
-  void SetText(const std::string& text);
+  // This method is typically used to update the TextInputModel's editing state
+  // when the Flutter framework sends its latest text editing state.
+  bool SetText(const std::string& text,
+               const TextRange& selection = TextRange(0),
+               const TextRange& composing_range = TextRange(0));
 
   // Attempts to set the text selection.
   //
   // Returns false if the selection is not within the bounds of the text.
   // While in composing mode, the selection is restricted to the composing
   // range; otherwise, it is restricted to the length of the text.
+  //
+  // To update both the text and the selection/composing range within the text
+  // (for instance, when the framework sends its latest text editing state),
+  // call |SetText| instead.
   bool SetSelection(const TextRange& range);
 
   // Attempts to set the composing range.
   //
   // Returns false if the range or offset are out of range for the text, or if
   // the offset is outside the composing range.
+  //
+  // To update both the text and the selection/composing range within the text
+  // (for instance, when the framework sends its latest text editing state),
+  // call |SetText| instead.
   bool SetComposingRange(const TextRange& range, size_t cursor_offset);
 
   // Begins IME composing mode.
@@ -46,12 +57,17 @@ class TextInputModel {
   // are restricted to the composing range.
   void BeginComposing();
 
-  // Replaces the composing range with new UTF-16 text.
+  // Replaces the composing range with new UTF-16 text, and sets the selection.
   //
-  // If a selection of non-zero length exists, it is deleted if the composing
-  // text is non-empty. The composing range is adjusted to the length of
-  // |text| and the selection base and offset are set to the end of the
-  // composing range.
+  // The given |text| replaces text within the current composing range, or the
+  // current selection if the text wasn't composing. The composing range is
+  // adjusted to the length of |text|, and the |selection| describes the new
+  // selection range, relative to the start of the new composing range.
+  void UpdateComposingText(const std::u16string& text,
+                           const TextRange& selection);
+
+  // Replaces the composing range with new UTF-16 text and sets the selection to
+  // the end of the composing text.
   void UpdateComposingText(const std::u16string& text);
 
   // Replaces the composing range with new UTF-8 text.

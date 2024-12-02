@@ -11,15 +11,18 @@
 #include "flutter/testing/fixture_test.h"
 #include "flutter/testing/testing.h"
 
+// CREATE_NATIVE_ENTRY is leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
+
 namespace flutter {
 namespace testing {
 
-const std::string kernel_file_name = "no_plugin_registrant_kernel_blob.bin";
-const std::string elf_file_name = "no_plugin_registrant_app_elf_snapshot.so";
+const std::string kKernelFileName = "no_plugin_registrant_kernel_blob.bin";
+const std::string kElfFileName = "no_plugin_registrant_app_elf_snapshot.so";
 
 class DartIsolateTest : public FixtureTest {
  public:
-  DartIsolateTest() : FixtureTest(kernel_file_name, elf_file_name, "") {}
+  DartIsolateTest() : FixtureTest(kKernelFileName, kElfFileName, "") {}
 };
 
 TEST_F(DartIsolateTest, DartPluginRegistrantIsNotPresent) {
@@ -55,7 +58,7 @@ TEST_F(DartIsolateTest, DartPluginRegistrantIsNotPresent) {
   );
 
   auto kernel_path =
-      fml::paths::JoinPaths({GetFixturesPath(), kernel_file_name});
+      fml::paths::JoinPaths({GetFixturesPath(), kKernelFileName});
   auto isolate = RunDartCodeInIsolate(vm_ref, settings, task_runners, "main",
                                       {}, kernel_path);
 
@@ -71,3 +74,5 @@ TEST_F(DartIsolateTest, DartPluginRegistrantIsNotPresent) {
 
 }  // namespace testing
 }  // namespace flutter
+
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)

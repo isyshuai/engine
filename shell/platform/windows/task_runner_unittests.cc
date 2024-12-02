@@ -4,6 +4,7 @@
 
 #include "flutter/shell/platform/windows/task_runner.h"
 
+#include "flutter/fml/macros.h"
 #include "gtest/gtest.h"
 
 namespace flutter {
@@ -25,6 +26,15 @@ class MockTaskRunner : public TaskRunner {
     // Do nothing to avoid processing tasks immediately after the tasks is
     // posted.
   }
+
+  virtual TaskTimePoint GetCurrentTimeForTask() const override {
+    return TaskTimePoint(
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::nanoseconds(10000)));
+  }
+
+ private:
+  FML_DISALLOW_COPY_AND_ASSIGN(MockTaskRunner);
 };
 
 uint64_t MockGetCurrentTime() {

@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_CONTEXT_GL_H_
-#define FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_CONTEXT_GL_H_
+#ifndef FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_CONTEXT_GL_H_
+#define FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_CONTEXT_GL_H_
 
 #include "flutter/shell/platform/embedder/tests/embedder_test_context.h"
+
+#include "flutter/testing/test_gl_context.h"
 #include "flutter/testing/test_gl_surface.h"
 
 namespace flutter {
@@ -14,7 +16,10 @@ namespace testing {
 class EmbedderTestContextGL : public EmbedderTestContext {
  public:
   using GLGetFBOCallback = std::function<void(FlutterFrameInfo frame_info)>;
-  using GLPresentCallback = std::function<void(uint32_t fbo_id)>;
+  using GLPopulateExistingDamageCallback =
+      std::function<void(intptr_t id, FlutterDamage* existing_damage)>;
+  using GLPresentCallback =
+      std::function<void(FlutterPresentInfo present_info)>;
 
   explicit EmbedderTestContextGL(std::string assets_path = "");
 
@@ -24,6 +29,18 @@ class EmbedderTestContextGL : public EmbedderTestContext {
 
   // |EmbedderTestContext|
   EmbedderTestContextType GetContextType() const override;
+
+  // Used to explicitly set an `open_gl.fbo_callback`. Using this method will
+  // cause your test to fail since the ctor for this class sets
+  // `open_gl.fbo_callback_with_frame_info`. This method exists as a utility to
+  // explicitly test this behavior.
+  void SetOpenGLFBOCallBack();
+
+  // Used to explicitly set an `open_gl.present`. Using this method will cause
+  // your test to fail since the ctor for this class sets
+  // `open_gl.present_with_info`. This method exists as a utility to explicitly
+  // test this behavior.
+  void SetOpenGLPresentCallBack();
 
   //----------------------------------------------------------------------------
   /// @brief      Sets a callback that will be invoked (on the raster task
@@ -36,7 +53,10 @@ class EmbedderTestContextGL : public EmbedderTestContext {
   /// @param[in]  callback  The callback to set. The previous callback will be
   ///                       un-registered.
   ///
-  void SetGLGetFBOCallback(GLGetFBOCallback callback);
+  void SetGLGetFBOCallback(const GLGetFBOCallback& callback);
+
+  void SetGLPopulateExistingDamageCallback(
+      GLPopulateExistingDamageCallback callback);
 
   uint32_t GetWindowFBOId() const;
 
@@ -53,32 +73,35 @@ class EmbedderTestContextGL : public EmbedderTestContext {
   ///
   void SetGLPresentCallback(GLPresentCallback callback);
 
- protected:
-  virtual void SetupCompositor() override;
+  void GLPopulateExistingDamage(const intptr_t id,
+                                FlutterDamage* existing_damage);
+
+  void* GLGetProcAddress(const char* name);
 
  private:
-  // This allows the builder to access the hooks.
-  friend class EmbedderConfigBuilder;
+  // |EmbedderTestContext|
+  void SetSurface(SkISize surface_size) override;
 
+  // |EmbedderTestContext|
+  void SetupCompositor() override;
+
+  std::shared_ptr<TestEGLContext> egl_context_;
   std::unique_ptr<TestGLSurface> gl_surface_;
   size_t gl_surface_present_count_ = 0;
   std::mutex gl_callback_mutex_;
   GLGetFBOCallback gl_get_fbo_callback_;
   GLPresentCallback gl_present_callback_;
-
-  void SetupSurface(SkISize surface_size) override;
+  GLPopulateExistingDamageCallback gl_populate_existing_damage_callback_;
 
   bool GLMakeCurrent();
 
   bool GLClearCurrent();
 
-  bool GLPresent(uint32_t fbo_id);
+  bool GLPresent(FlutterPresentInfo present_info);
 
   uint32_t GLGetFramebuffer(FlutterFrameInfo frame_info);
 
   bool GLMakeResourceCurrent();
-
-  void* GLGetProcAddress(const char* name);
 
   FML_DISALLOW_COPY_AND_ASSIGN(EmbedderTestContextGL);
 };
@@ -86,4 +109,4 @@ class EmbedderTestContextGL : public EmbedderTestContext {
 }  // namespace testing
 }  // namespace flutter
 
-#endif  // FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_CONTEXT_GL_H_
+#endif  // FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_CONTEXT_GL_H_

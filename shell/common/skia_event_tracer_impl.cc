@@ -81,7 +81,7 @@ class FlutterEventTracer : public SkEventTracer {
 
   FlutterEventTracer(bool enabled,
                      const std::optional<std::vector<std::string>>& allowlist)
-      : enabled_(enabled ? kYes : kNo), shaders_category_flag_(nullptr) {
+      : enabled_(enabled ? kYes : kNo) {
     if (allowlist.has_value()) {
       allowlist_.emplace();
       for (const std::string& category : *allowlist) {
@@ -220,10 +220,12 @@ class FlutterEventTracer : public SkEventTracer {
       case TRACE_EVENT_PHASE_BEGIN:
       case TRACE_EVENT_PHASE_COMPLETE:
         if (devtoolsTag) {
-          fml::tracing::TraceEvent1(kSkiaTag, name, kDevtoolsTagArg,
+          fml::tracing::TraceEvent1(kSkiaTag, name, /*flow_id_count=*/0,
+                                    /*flow_ids=*/nullptr, kDevtoolsTagArg,
                                     devtoolsTag);
         } else {
-          fml::tracing::TraceEvent0(kSkiaTag, name);
+          fml::tracing::TraceEvent0(kSkiaTag, name, /*flow_id_count=*/0,
+                                    /*flow_ids=*/nullptr);
         }
         break;
       case TRACE_EVENT_PHASE_END:
@@ -231,18 +233,26 @@ class FlutterEventTracer : public SkEventTracer {
         break;
       case TRACE_EVENT_PHASE_INSTANT:
         if (devtoolsTag) {
-          fml::tracing::TraceEventInstant1(kSkiaTag, name, kDevtoolsTagArg,
-                                           devtoolsTag);
+          fml::tracing::TraceEventInstant1(kSkiaTag, name,
+                                           /*flow_id_count=*/0,
+                                           /*flow_ids=*/nullptr,
+                                           kDevtoolsTagArg, devtoolsTag);
         } else {
-          fml::tracing::TraceEventInstant0(kSkiaTag, name);
+          fml::tracing::TraceEventInstant0(kSkiaTag, name,
+                                           /*flow_id_count=*/0,
+                                           /*flow_ids=*/nullptr);
         }
         break;
       case TRACE_EVENT_PHASE_ASYNC_BEGIN:
         if (devtoolsTag) {
           fml::tracing::TraceEventAsyncBegin1(kSkiaTag, name, id,
+                                              /*flow_id_count=*/0,
+                                              /*flow_ids=*/nullptr,
                                               kDevtoolsTagArg, devtoolsTag);
         } else {
-          fml::tracing::TraceEventAsyncBegin0(kSkiaTag, name, id);
+          fml::tracing::TraceEventAsyncBegin0(kSkiaTag, name, id,
+                                              /*flow_id_count=*/0,
+                                              /*flow_ids=*/nullptr);
         }
         break;
       case TRACE_EVENT_PHASE_ASYNC_END:
@@ -274,6 +284,7 @@ class FlutterEventTracer : public SkEventTracer {
 
   const uint8_t* getCategoryGroupEnabled(const char* name) override {
     // Skia will only use long-lived string literals as event names.
+    std::lock_guard<std::mutex> lock(flag_map_mutex_);
     auto flag_it = category_flag_map_.find(name);
     if (flag_it == category_flag_map_.end()) {
       bool allowed;
@@ -295,6 +306,7 @@ class FlutterEventTracer : public SkEventTracer {
 
   const char* getCategoryGroupName(
       const uint8_t* category_enabled_flag) override {
+    std::lock_guard<std::mutex> lock(flag_map_mutex_);
     auto reverse_it = reverse_flag_map_.find(category_enabled_flag);
     if (reverse_it != reverse_flag_map_.end()) {
       return reverse_it->second;
@@ -306,9 +318,10 @@ class FlutterEventTracer : public SkEventTracer {
  private:
   uint8_t enabled_;
   std::optional<std::set<std::string>> allowlist_;
+  std::mutex flag_map_mutex_;
   std::map<const char*, uint8_t> category_flag_map_;
   std::map<const uint8_t*, const char*> reverse_flag_map_;
-  const uint8_t* shaders_category_flag_;
+  const uint8_t* shaders_category_flag_ = nullptr;
   FML_DISALLOW_COPY_AND_ASSIGN(FlutterEventTracer);
 };
 

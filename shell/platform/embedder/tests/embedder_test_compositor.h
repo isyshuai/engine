@@ -11,7 +11,7 @@
 #include "flutter/fml/macros.h"
 #include "flutter/shell/platform/embedder/embedder.h"
 #include "flutter/shell/platform/embedder/tests/embedder_test_backingstore_producer.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 
 namespace flutter {
 namespace testing {
@@ -21,25 +21,31 @@ class EmbedderTestCompositor {
   using PlatformViewRendererCallback =
       std::function<sk_sp<SkImage>(const FlutterLayer& layer,
                                    GrDirectContext* context)>;
-  using PresentCallback =
-      std::function<void(const FlutterLayer** layers, size_t layers_count)>;
+  using PresentCallback = std::function<void(FlutterViewId view_id,
+                                             const FlutterLayer** layers,
+                                             size_t layers_count)>;
 
   EmbedderTestCompositor(SkISize surface_size, sk_sp<GrDirectContext> context);
 
   virtual ~EmbedderTestCompositor();
 
-  void SetBackingStoreProducer(
-      std::unique_ptr<EmbedderTestBackingStoreProducer> backingstore_producer);
+  virtual void SetRenderTargetType(
+      EmbedderTestBackingStoreProducer::RenderTargetType type,
+      FlutterSoftwarePixelFormat software_pixfmt) = 0;
 
   bool CreateBackingStore(const FlutterBackingStoreConfig* config,
                           FlutterBackingStore* backing_store_out);
 
   bool CollectBackingStore(const FlutterBackingStore* backing_store);
 
-  bool Present(const FlutterLayer** layers, size_t layers_count);
+  bool Present(FlutterViewId view_id,
+               const FlutterLayer** layers,
+               size_t layers_count);
 
   void SetPlatformViewRendererCallback(
       const PlatformViewRendererCallback& callback);
+
+  sk_sp<SkSurface> GetSurface(const FlutterBackingStore* backing_store) const;
 
   //----------------------------------------------------------------------------
   /// @brief      Allows tests to install a callback to notify them when the
@@ -64,11 +70,11 @@ class EmbedderTestCompositor {
 
   size_t GetBackingStoresCollectedCount() const;
 
-  void AddOnCreateRenderTargetCallback(fml::closure callback);
+  void AddOnCreateRenderTargetCallback(const fml::closure& callback);
 
-  void AddOnCollectRenderTargetCallback(fml::closure callback);
+  void AddOnCollectRenderTargetCallback(const fml::closure& callback);
 
-  void AddOnPresentCallback(fml::closure callback);
+  void AddOnPresentCallback(const fml::closure& callback);
 
   sk_sp<GrDirectContext> GetGrContext();
 
@@ -98,4 +104,4 @@ class EmbedderTestCompositor {
 }  // namespace testing
 }  // namespace flutter
 
-#endif  // FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_COMPOSITOR_GL_H_
+#endif  // FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_COMPOSITOR_H_

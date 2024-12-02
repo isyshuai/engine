@@ -13,16 +13,23 @@
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterEngine_Internal.h"
 #import "flutter/shell/platform/darwin/ios/platform_view_ios.h"
 
-FLUTTER_ASSERT_NOT_ARC
+FLUTTER_ASSERT_ARC
 
 namespace flutter {
 namespace {
 
 class FakeDelegate : public PlatformView::Delegate {
+ public:
   void OnPlatformViewCreated(std::unique_ptr<Surface> surface) override {}
   void OnPlatformViewDestroyed() override {}
+  void OnPlatformViewScheduleFrame() override {}
+  void OnPlatformViewAddView(int64_t view_id,
+                             const ViewportMetrics& viewport_metrics,
+                             AddViewCallback callback) override {}
+  void OnPlatformViewRemoveView(int64_t view_id, RemoveViewCallback callback) override {}
   void OnPlatformViewSetNextFrameCallback(const fml::closure& closure) override {}
-  void OnPlatformViewSetViewportMetrics(const ViewportMetrics& metrics) override {}
+  void OnPlatformViewSetViewportMetrics(int64_t view_id, const ViewportMetrics& metrics) override {}
+  const flutter::Settings& OnPlatformViewGetSettings() const override { return settings_; }
   void OnPlatformViewDispatchPlatformMessage(std::unique_ptr<PlatformMessage> message) override {}
   void OnPlatformViewDispatchPointerDataPacket(std::unique_ptr<PointerDataPacket> packet) override {
   }
@@ -44,6 +51,8 @@ class FakeDelegate : public PlatformView::Delegate {
                                     bool transient) override {}
   void UpdateAssetResolverByType(std::unique_ptr<AssetResolver> updated_asset_resolver,
                                  AssetResolver::AssetResolverType type) override {}
+
+  flutter::Settings settings_;
 };
 
 }  // namespace
@@ -60,6 +69,7 @@ flutter::FakeDelegate fake_delegate;
 - (void)setUp {
   fml::MessageLoop::EnsureInitializedForCurrentThread();
   auto thread_task_runner = fml::MessageLoop::GetCurrent().GetTaskRunner();
+  auto sync_switch = std::make_shared<fml::SyncSwitch>();
   flutter::TaskRunners runners(/*label=*/self.name.UTF8String,
                                /*platform=*/thread_task_runner,
                                /*raster=*/thread_task_runner,
@@ -67,9 +77,13 @@ flutter::FakeDelegate fake_delegate;
                                /*io=*/thread_task_runner);
   platform_view = std::make_unique<flutter::PlatformViewIOS>(
       /*delegate=*/fake_delegate,
-      /*rendering_api=*/flutter::IOSRenderingAPI::kSoftware,
+      /*rendering_api=*/fake_delegate.settings_.enable_impeller
+          ? flutter::IOSRenderingAPI::kMetal
+          : flutter::IOSRenderingAPI::kSoftware,
       /*platform_views_controller=*/nil,
-      /*task_runners=*/runners);
+      /*task_runners=*/runners,
+      /*worker_task_runner=*/nil,
+      /*is_gpu_disabled_sync_switch=*/sync_switch);
   weak_factory = std::make_unique<fml::WeakPtrFactory<flutter::PlatformView>>(platform_view.get());
 }
 
@@ -83,8 +97,7 @@ flutter::FakeDelegate fake_delegate;
 }
 
 - (void)testCallsNotifyLowMemory {
-  id project = OCMClassMock([FlutterDartProject class]);
-  FlutterEngine* engine = [[FlutterEngine alloc] initWithName:@"tester" project:project];
+  FlutterEngine* engine = [[FlutterEngine alloc] initWithName:@"tester"];
   XCTAssertNotNil(engine);
   id mockEngine = OCMPartialMock(engine);
   OCMStub([mockEngine notifyLowMemory]);

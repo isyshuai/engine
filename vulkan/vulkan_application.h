@@ -10,12 +10,11 @@
 #include <vector>
 
 #include "flutter/fml/macros.h"
+#include "flutter/vulkan/procs/vulkan_handle.h"
 #include "vulkan_debug_report.h"
-#include "vulkan_handle.h"
 
 namespace vulkan {
 
-static const int kGrCacheMaxCount = 8192;
 static const size_t kGrCacheMaxByteSize = 512 * (1 << 20);
 
 class VulkanDevice;
@@ -45,19 +44,32 @@ class VulkanApplication {
   std::unique_ptr<VulkanDevice> AcquireFirstCompatibleLogicalDevice() const;
 
  private:
-  VulkanProcTable& vk;
-  VulkanHandle<VkInstance> instance_;
-  uint32_t api_version_;
-  std::unique_ptr<VulkanDebugReport> debug_report_;
+  // Located at the beginning so it outlives instance_.
+  std::string initialization_logs_;
+  bool initialization_logs_enabled_ = true;
   bool valid_;
   bool enable_validation_layers_;
+  uint8_t padding_;
+  uint32_t api_version_;
+  VulkanProcTable& vk_;
+  VulkanHandle<VkInstance> instance_;
+  std::unique_ptr<VulkanDebugReport> debug_report_;
 
   std::vector<VkPhysicalDevice> GetPhysicalDevices() const;
   std::vector<VkExtensionProperties> GetSupportedInstanceExtensions(
       const VulkanProcTable& vk) const;
   bool ExtensionSupported(
       const std::vector<VkExtensionProperties>& supported_extensions,
-      std::string extension_name);
+      const std::string& extension_name);
+  static VKAPI_ATTR VkBool32 DebugReportCallback(
+      VkDebugReportFlagsEXT flags,
+      VkDebugReportObjectTypeEXT objectType,
+      uint64_t object,
+      size_t location,
+      int32_t messageCode,
+      const char* pLayerPrefix,
+      const char* pMessage,
+      void* pUserData);
 
   FML_DISALLOW_COPY_AND_ASSIGN(VulkanApplication);
 };

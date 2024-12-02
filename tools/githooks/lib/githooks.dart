@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-
 import 'dart:io' as io;
 
 import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 
+import 'src/post_checkout_command.dart';
+import 'src/post_merge_command.dart';
 import 'src/pre_push_command.dart';
+import 'src/pre_rebase_command.dart';
 
 /// Runs the githooks
 Future<int> run(List<String> args) async {
@@ -17,10 +18,17 @@ Future<int> run(List<String> args) async {
     'githooks',
     'Githooks implementation for the flutter/engine repo.',
   )
-  ..addCommand(PrePushCommand());
+  ..addCommand(PostCheckoutCommand())
+  ..addCommand(PostMergeCommand())
+  ..addCommand(PrePushCommand())
+  ..addCommand(PreRebaseCommand());
 
   // Add top-level arguments.
   runner.argParser
+    ..addFlag(
+      'enable-clang-tidy',
+      help: 'Enable running clang-tidy on changed files.',
+    )
     ..addOption(
       'flutter',
       abbr: 'f',
@@ -30,7 +38,6 @@ Future<int> run(List<String> args) async {
       'verbose',
       abbr: 'v',
       help: 'Runs with verbose logging',
-      defaultsTo: false,
     );
 
   if (args.isEmpty) {

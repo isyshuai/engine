@@ -5,14 +5,9 @@
 #include "flutter/shell/platform/common/text_input_model.h"
 
 #include <algorithm>
-#include <codecvt>
-#include <locale>
+#include <string>
 
-#if defined(_MSC_VER)
-// TODO(naifu): This temporary code is to solve link error.(VS2015/2017)
-// https://social.msdn.microsoft.com/Forums/vstudio/en-US/8f40dcd8-c67f-4eba-9134-a19b9178e481/vs-2015-rc-linker-stdcodecvt-error
-std::locale::id std::codecvt<char16_t, char, _Mbstatet>::id;
-#endif  // defined(_MSC_VER)
+#include "flutter/fml/string_conversion.h"
 
 namespace flutter {
 
@@ -33,12 +28,19 @@ TextInputModel::TextInputModel() = default;
 
 TextInputModel::~TextInputModel() = default;
 
-void TextInputModel::SetText(const std::string& text) {
-  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
-      utf16_converter;
-  text_ = utf16_converter.from_bytes(text);
-  selection_ = TextRange(0);
-  composing_range_ = TextRange(0);
+bool TextInputModel::SetText(const std::string& text,
+                             const TextRange& selection,
+                             const TextRange& composing_range) {
+  text_ = fml::Utf8ToUtf16(text);
+  if (!text_range().Contains(selection) ||
+      !text_range().Contains(composing_range)) {
+    return false;
+  }
+
+  selection_ = selection;
+  composing_range_ = composing_range;
+  composing_ = !composing_range.collapsed();
+  return true;
 }
 
 bool TextInputModel::SetSelection(const TextRange& range) {
@@ -67,21 +69,26 @@ void TextInputModel::BeginComposing() {
   composing_range_ = TextRange(selection_.start());
 }
 
-void TextInputModel::UpdateComposingText(const std::u16string& text) {
+void TextInputModel::UpdateComposingText(const std::u16string& text,
+                                         const TextRange& selection) {
   // Preserve selection if we get a no-op update to the composing region.
   if (text.length() == 0 && composing_range_.collapsed()) {
     return;
   }
-  DeleteSelected();
-  text_.replace(composing_range_.start(), composing_range_.length(), text);
+  const TextRange& rangeToDelete =
+      composing_range_.collapsed() ? selection_ : composing_range_;
+  text_.replace(rangeToDelete.start(), rangeToDelete.length(), text);
   composing_range_.set_end(composing_range_.start() + text.length());
-  selection_ = TextRange(composing_range_.end());
+  selection_ = TextRange(selection.start() + composing_range_.start(),
+                         selection.extent() + composing_range_.start());
+}
+
+void TextInputModel::UpdateComposingText(const std::u16string& text) {
+  UpdateComposingText(text, TextRange(text.length()));
 }
 
 void TextInputModel::UpdateComposingText(const std::string& text) {
-  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
-      utf16_converter;
-  UpdateComposingText(utf16_converter.from_bytes(text));
+  UpdateComposingText(fml::Utf8ToUtf16(text));
 }
 
 void TextInputModel::CommitComposing() {
@@ -140,9 +147,7 @@ void TextInputModel::AddText(const std::u16string& text) {
 }
 
 void TextInputModel::AddText(const std::string& text) {
-  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
-      utf16_converter;
-  AddText(utf16_converter.from_bytes(text));
+  AddText(fml::Utf8ToUtf16(text));
 }
 
 bool TextInputModel::Backspace() {
@@ -290,18 +295,14 @@ bool TextInputModel::MoveCursorBack() {
 }
 
 std::string TextInputModel::GetText() const {
-  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
-      utf8_converter;
-  return utf8_converter.to_bytes(text_);
+  return fml::Utf16ToUtf8(text_);
 }
 
 int TextInputModel::GetCursorOffset() const {
   // Measure the length of the current text up to the selection extent.
   // There is probably a much more efficient way of doing this.
   auto leading_text = text_.substr(0, selection_.extent());
-  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
-      utf8_converter;
-  return utf8_converter.to_bytes(leading_text).size();
+  return fml::Utf16ToUtf8(leading_text).size();
 }
 
 }  // namespace flutter

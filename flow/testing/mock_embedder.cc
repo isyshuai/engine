@@ -11,8 +11,12 @@ MockViewEmbedder::MockViewEmbedder() = default;
 
 MockViewEmbedder::~MockViewEmbedder() = default;
 
+void MockViewEmbedder::AddCanvas(DlCanvas* canvas) {
+  contexts_.emplace_back(canvas);
+}
+
 // |ExternalViewEmbedder|
-SkCanvas* MockViewEmbedder::GetRootCanvas() {
+DlCanvas* MockViewEmbedder::GetRootCanvas() {
   return nullptr;
 }
 
@@ -21,24 +25,26 @@ void MockViewEmbedder::CancelFrame() {}
 
 // |ExternalViewEmbedder|
 void MockViewEmbedder::BeginFrame(
-    SkISize frame_size,
     GrDirectContext* context,
-    double device_pixel_ratio,
-    fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger) {}
+    const fml::RefPtr<fml::RasterThreadMerger>& raster_thread_merger) {}
+
+// |ExternalViewEmbedder|
+void MockViewEmbedder::PrepareFlutterView(SkISize frame_size,
+                                          double device_pixel_ratio) {}
 
 // |ExternalViewEmbedder|
 void MockViewEmbedder::PrerollCompositeEmbeddedView(
-    int view_id,
-    std::unique_ptr<EmbeddedViewParams> params) {}
-
-// |ExternalViewEmbedder|
-std::vector<SkCanvas*> MockViewEmbedder::GetCurrentCanvases() {
-  return std::vector<SkCanvas*>({});
+    int64_t view_id,
+    std::unique_ptr<EmbeddedViewParams> params) {
+  prerolled_views_.emplace_back(view_id);
 }
 
 // |ExternalViewEmbedder|
-SkCanvas* MockViewEmbedder::CompositeEmbeddedView(int view_id) {
-  return nullptr;
+DlCanvas* MockViewEmbedder::CompositeEmbeddedView(int64_t view_id) {
+  painted_views_.emplace_back(view_id);
+  DlCanvas* canvas = contexts_.front();
+  contexts_.pop_front();
+  return canvas;
 }
 
 }  // namespace testing

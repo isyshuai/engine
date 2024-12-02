@@ -1,5 +1,10 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 package io.flutter.embedding.engine.systemchannels;
 
+import static io.flutter.Build.API_LEVELS;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.eq;
@@ -9,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import android.annotation.TargetApi;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import java.util.HashMap;
@@ -17,14 +23,13 @@ import org.json.JSONException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
-import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 @Config(
     manifest = Config.NONE,
     shadows = {})
-@RunWith(RobolectricTestRunner.class)
-@TargetApi(24)
+@RunWith(AndroidJUnit4.class)
+@TargetApi(API_LEVELS.API_24)
 public class RestorationChannelTest {
   @Test
   public void itDoesNotDoAnythingWhenRestorationDataIsSetBeforeFrameworkAsks()

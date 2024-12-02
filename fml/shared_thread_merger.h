@@ -57,9 +57,9 @@ class SharedThreadMerger
  private:
   fml::TaskQueueId owner_;
   fml::TaskQueueId subsumed_;
-  fml::RefPtr<fml::MessageLoopTaskQueues> task_queues_;
+  fml::MessageLoopTaskQueues* task_queues_;
   std::mutex mutex_;
-  bool enabled_;
+  bool enabled_ = false;
 
   /// The |MergeWithLease| or |ExtendLeaseTo| method will record the caller
   /// into this lease_term_by_caller_ map, |UnMergeNowIfLastOne|

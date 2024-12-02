@@ -4,8 +4,9 @@
 
 package io.flutter.plugin.mouse;
 
+import static io.flutter.Build.API_LEVELS;
+
 import android.annotation.TargetApi;
-import android.os.Build;
 import android.view.PointerIcon;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
@@ -13,8 +14,8 @@ import io.flutter.embedding.engine.systemchannels.MouseCursorChannel;
 import java.util.HashMap;
 
 /** A mandatory plugin that handles mouse cursor requests. */
-@TargetApi(Build.VERSION_CODES.N)
-@RequiresApi(Build.VERSION_CODES.N)
+@TargetApi(API_LEVELS.API_24)
+@RequiresApi(API_LEVELS.API_24)
 public class MouseCursorPlugin {
   @NonNull private final MouseCursorViewDelegate mView;
   @NonNull private final MouseCursorChannel mouseCursorChannel;
@@ -121,6 +122,7 @@ public class MouseCursorPlugin {
      * <p>This is typically implemented by calling {@link android.view.PointerIcon#getSystemIcon}
      * with the context associated with this view.
      */
+    @NonNull
     public PointerIcon getSystemPointerIcon(int type);
 
     /**

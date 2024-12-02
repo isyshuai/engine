@@ -16,10 +16,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.AssetManager;
-import android.os.Build;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.Selection;
@@ -31,17 +33,24 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputContentInfo;
 import android.view.inputmethod.InputMethodManager;
+import androidx.core.view.inputmethod.InputConnectionCompat;
+import androidx.test.core.app.ApplicationProvider;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.ibm.icu.lang.UCharacter;
 import com.ibm.icu.lang.UProperty;
 import io.flutter.embedding.android.KeyboardManager;
 import io.flutter.embedding.engine.FlutterJNI;
 import io.flutter.embedding.engine.dart.DartExecutor;
+import io.flutter.embedding.engine.systemchannels.ScribeChannel;
 import io.flutter.embedding.engine.systemchannels.TextInputChannel;
 import io.flutter.plugin.common.JSONMethodCodec;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.util.FakeKeyEvent;
+import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.junit.Before;
@@ -50,19 +59,23 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.shadow.api.Shadow;
+import org.robolectric.shadows.ShadowContentResolver;
 import org.robolectric.shadows.ShadowInputMethodManager;
 
 @Config(
     manifest = Config.NONE,
     shadows = {InputConnectionAdaptorTest.TestImm.class})
-@RunWith(RobolectricTestRunner.class)
+@RunWith(AndroidJUnit4.class)
 public class InputConnectionAdaptorTest {
+  private final Context ctx = ApplicationProvider.getApplicationContext();
+  private ContentResolver contentResolver;
+  private ShadowContentResolver shadowContentResolver;
+
   @Mock KeyboardManager mockKeyboardManager;
   // Verifies the method and arguments for a captured method call.
   private void verifyMethodCall(ByteBuffer buffer, String methodName, String[] expectedArgs)
@@ -82,15 +95,18 @@ public class InputConnectionAdaptorTest {
   @Before
   public void setUp() {
     MockitoAnnotations.openMocks(this);
+    contentResolver = ctx.getContentResolver();
+    shadowContentResolver = Shadows.shadowOf(contentResolver);
   }
 
   @Test
   public void inputConnectionAdaptor_ReceivesEnter() throws NullPointerException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     FlutterJNI mockFlutterJni = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJni, mock(AssetManager.class)));
     int inputTargetId = 0;
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState mEditable = new ListenableEditingState(null, testView);
     Selection.setSelection(mEditable, 0, 0);
     ListenableEditingState spyEditable = spy(mEditable);
@@ -99,10 +115,16 @@ public class InputConnectionAdaptorTest {
 
     InputConnectionAdaptor inputConnectionAdaptor =
         new InputConnectionAdaptor(
-            testView, inputTargetId, textInputChannel, mockKeyboardManager, spyEditable, outAttrs);
+            testView,
+            inputTargetId,
+            textInputChannel,
+            scribeChannel,
+            mockKeyboardManager,
+            spyEditable,
+            outAttrs);
 
     // Send an enter key and make sure the Editable received it.
-    FakeKeyEvent keyEvent = new FakeKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER);
+    FakeKeyEvent keyEvent = new FakeKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, '\n');
     inputConnectionAdaptor.handleKeyEvent(keyEvent);
     verify(spyEditable, times(1)).insert(eq(0), anyString());
   }
@@ -120,10 +142,11 @@ public class InputConnectionAdaptorTest {
     assertEquals(editable.length(), Selection.getSelectionEnd(editable));
   }
 
+  @SuppressWarnings("deprecation")
+  // ClipboardManager.hasText is deprecated.
   @Test
   public void testPerformContextMenuAction_cut() {
-    ClipboardManager clipboardManager =
-        RuntimeEnvironment.application.getSystemService(ClipboardManager.class);
+    ClipboardManager clipboardManager = ctx.getSystemService(ClipboardManager.class);
     int selStart = 6;
     int selEnd = 11;
     ListenableEditingState editable = sampleEditable(selStart, selEnd);
@@ -138,10 +161,11 @@ public class InputConnectionAdaptorTest {
     assertFalse(editable.toString().contains(textToBeCut));
   }
 
+  @SuppressWarnings("deprecation")
+  // ClipboardManager.hasText is deprecated.
   @Test
   public void testPerformContextMenuAction_copy() {
-    ClipboardManager clipboardManager =
-        RuntimeEnvironment.application.getSystemService(ClipboardManager.class);
+    ClipboardManager clipboardManager = ctx.getSystemService(ClipboardManager.class);
     int selStart = 6;
     int selEnd = 11;
     ListenableEditingState editable = sampleEditable(selStart, selEnd);
@@ -158,10 +182,11 @@ public class InputConnectionAdaptorTest {
         clipboardManager.getPrimaryClip().getItemAt(0).getText());
   }
 
+  @SuppressWarnings("deprecation")
+  // ClipboardManager.setText is deprecated.
   @Test
   public void testPerformContextMenuAction_paste() {
-    ClipboardManager clipboardManager =
-        RuntimeEnvironment.application.getSystemService(ClipboardManager.class);
+    ClipboardManager clipboardManager = ctx.getSystemService(ClipboardManager.class);
     String textToBePasted = "deadbeef";
     clipboardManager.setText(textToBePasted);
     ListenableEditingState editable = sampleEditable(0, 0);
@@ -173,19 +198,86 @@ public class InputConnectionAdaptorTest {
     assertTrue(editable.toString().startsWith(textToBePasted));
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
-  public void testPerformPrivateCommand_dataIsNull() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+  public void testCommitContent() throws JSONException {
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
+            mockKeyboardManager,
+            editable,
+            null,
+            mockFlutterJNI);
+
+    String uri = "content://mock/uri/test/commitContent";
+    Charset charset = Charset.forName("UTF-8");
+    String fakeImageData = "fake image data";
+    byte[] fakeImageDataBytes = fakeImageData.getBytes(charset);
+    shadowContentResolver.registerInputStream(
+        Uri.parse(uri), new ByteArrayInputStream(fakeImageDataBytes));
+
+    boolean commitContentSuccess =
+        adaptor.commitContent(
+            new InputContentInfo(
+                Uri.parse(uri),
+                new ClipDescription("commitContent test", new String[] {"image/png"})),
+            InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,
+            null);
+    assertTrue(commitContentSuccess);
+
+    ArgumentCaptor<String> channelCaptor = ArgumentCaptor.forClass(String.class);
+    ArgumentCaptor<ByteBuffer> bufferCaptor = ArgumentCaptor.forClass(ByteBuffer.class);
+    verify(dartExecutor, times(1)).send(channelCaptor.capture(), bufferCaptor.capture(), isNull());
+    assertEquals("flutter/textinput", channelCaptor.getValue());
+
+    String fakeImageDataIntString = "";
+    for (int i = 0; i < fakeImageDataBytes.length; i++) {
+      int byteAsInt = fakeImageDataBytes[i];
+      fakeImageDataIntString += byteAsInt;
+      if (i < (fakeImageDataBytes.length - 1)) {
+        fakeImageDataIntString += ",";
+      }
+    }
+    verifyMethodCall(
+        bufferCaptor.getValue(),
+        "TextInputClient.performAction",
+        new String[] {
+          "0",
+          "TextInputAction.commitContent",
+          "{\"data\":["
+              + fakeImageDataIntString
+              + "],\"mimeType\":\"image\\/png\",\"uri\":\"content:\\/\\/mock\\/uri\\/test\\/commitContent\"}"
+        });
+  }
+
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
+  @Test
+  public void testPerformPrivateCommand_dataIsNull() throws JSONException {
+    View testView = new View(ctx);
+    int client = 0;
+    FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
+    DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
+    TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
+    ListenableEditingState editable = sampleEditable(0, 0);
+    InputConnectionAdaptor adaptor =
+        new InputConnectionAdaptor(
+            testView,
+            client,
+            textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -202,19 +294,23 @@ public class InputConnectionAdaptorTest {
         new String[] {"0", "{\"action\":\"actionCommand\"}"});
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsByteArray() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -237,19 +333,23 @@ public class InputConnectionAdaptorTest {
         });
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsByte() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -270,19 +370,23 @@ public class InputConnectionAdaptorTest {
         new String[] {"0", "{\"data\":{\"keyboard_layout\":3},\"action\":\"actionCommand\"}"});
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsCharArray() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -306,19 +410,23 @@ public class InputConnectionAdaptorTest {
         });
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsChar() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -339,19 +447,23 @@ public class InputConnectionAdaptorTest {
         new String[] {"0", "{\"data\":{\"keyboard_layout\":\"a\"},\"action\":\"actionCommand\"}"});
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsCharSequenceArray() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -376,19 +488,23 @@ public class InputConnectionAdaptorTest {
         });
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsCharSequence() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -411,19 +527,23 @@ public class InputConnectionAdaptorTest {
         });
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsFloat() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -444,19 +564,23 @@ public class InputConnectionAdaptorTest {
         new String[] {"0", "{\"data\":{\"keyboard_layout\":0.5},\"action\":\"actionCommand\"}"});
   }
 
+  @SuppressWarnings("deprecation")
+  // DartExecutor.send is deprecated.
   @Test
   public void testPerformPrivateCommand_dataIsFloatArray() throws JSONException {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     int client = 0;
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     DartExecutor dartExecutor = spy(new DartExecutor(mockFlutterJNI, mock(AssetManager.class)));
     TextInputChannel textInputChannel = new TextInputChannel(dartExecutor);
+    ScribeChannel scribeChannel = new ScribeChannel(dartExecutor);
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             client,
             textInputChannel,
+            scribeChannel,
             mockKeyboardManager,
             editable,
             null,
@@ -480,7 +604,8 @@ public class InputConnectionAdaptorTest {
   }
 
   @Test
-  public void testSendKeyEvent_shiftKeyUpCancelsSelection() {
+  public void testSendKeyEvent_shiftKeyUpDoesNotCancelSelection() {
+    // Regression test for https://github.com/flutter/flutter/issues/101569.
     int selStart = 5;
     int selEnd = 10;
     ListenableEditingState editable = sampleEditable(selStart, selEnd);
@@ -489,8 +614,8 @@ public class InputConnectionAdaptorTest {
     KeyEvent shiftKeyUp = new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_SHIFT_LEFT);
     boolean didConsume = adaptor.handleKeyEvent(shiftKeyUp);
 
-    assertTrue(didConsume);
-    assertEquals(selEnd, Selection.getSelectionStart(editable));
+    assertFalse(didConsume);
+    assertEquals(selStart, Selection.getSelectionStart(editable));
     assertEquals(selEnd, Selection.getSelectionEnd(editable));
   }
 
@@ -976,22 +1101,18 @@ public class InputConnectionAdaptorTest {
 
   @Test
   public void testExtractedText_monitoring() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-      return;
-    }
     ListenableEditingState editable = sampleEditable(5, 5);
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             1,
             mock(TextInputChannel.class),
+            mock(ScribeChannel.class),
             mockKeyboardManager,
             editable,
             new EditorInfo());
-    TestImm testImm =
-        Shadow.extract(
-            RuntimeEnvironment.application.getSystemService(Context.INPUT_METHOD_SERVICE));
+    TestImm testImm = Shadow.extract(ctx.getSystemService(Context.INPUT_METHOD_SERVICE));
 
     testImm.resetStates();
 
@@ -1032,23 +1153,18 @@ public class InputConnectionAdaptorTest {
 
   @Test
   public void testCursorAnchorInfo() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-      return;
-    }
-
     ListenableEditingState editable = sampleEditable(5, 5);
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ctx);
     InputConnectionAdaptor adaptor =
         new InputConnectionAdaptor(
             testView,
             1,
             mock(TextInputChannel.class),
+            mock(ScribeChannel.class),
             mockKeyboardManager,
             editable,
             new EditorInfo());
-    TestImm testImm =
-        Shadow.extract(
-            RuntimeEnvironment.application.getSystemService(Context.INPUT_METHOD_SERVICE));
+    TestImm testImm = Shadow.extract(ctx.getSystemService(Context.INPUT_METHOD_SERVICE));
 
     testImm.resetStates();
 
@@ -1121,7 +1237,7 @@ public class InputConnectionAdaptorTest {
     ListenableEditingState editable = sampleEditable(0, 0);
     InputConnectionAdaptor adaptor = sampleInputConnectionAdaptor(editable);
 
-    FakeKeyEvent keyEvent = new FakeKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
+    FakeKeyEvent keyEvent = new FakeKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, '\b');
     boolean didConsume = adaptor.handleKeyEvent(keyEvent);
 
     assertFalse(didConsume);
@@ -1167,7 +1283,7 @@ public class InputConnectionAdaptorTest {
 
   private static ListenableEditingState sampleEditable(int selStart, int selEnd) {
     ListenableEditingState sample =
-        new ListenableEditingState(null, new View(RuntimeEnvironment.application));
+        new ListenableEditingState(null, new View(ApplicationProvider.getApplicationContext()));
     sample.replace(0, 0, SAMPLE_TEXT);
     Selection.setSelection(sample, selStart, selEnd);
     return sample;
@@ -1175,7 +1291,7 @@ public class InputConnectionAdaptorTest {
 
   private static ListenableEditingState sampleEditable(int selStart, int selEnd, String text) {
     ListenableEditingState sample =
-        new ListenableEditingState(null, new View(RuntimeEnvironment.application));
+        new ListenableEditingState(null, new View(ApplicationProvider.getApplicationContext()));
     sample.replace(0, 0, text);
     Selection.setSelection(sample, selStart, selEnd);
     return sample;
@@ -1188,9 +1304,10 @@ public class InputConnectionAdaptorTest {
 
   private static InputConnectionAdaptor sampleInputConnectionAdaptor(
       ListenableEditingState editable, KeyboardManager mockKeyboardManager) {
-    View testView = new View(RuntimeEnvironment.application);
+    View testView = new View(ApplicationProvider.getApplicationContext());
     int client = 0;
     TextInputChannel textInputChannel = mock(TextInputChannel.class);
+    ScribeChannel scribeChannel = mock(ScribeChannel.class);
     FlutterJNI mockFlutterJNI = mock(FlutterJNI.class);
     when(mockFlutterJNI.isCodePointEmoji(anyInt()))
         .thenAnswer((invocation) -> Emoji.isEmoji((int) invocation.getArguments()[0]));
@@ -1204,7 +1321,14 @@ public class InputConnectionAdaptorTest {
         .thenAnswer(
             (invocation) -> Emoji.isRegionalIndicatorSymbol((int) invocation.getArguments()[0]));
     return new InputConnectionAdaptor(
-        testView, client, textInputChannel, mockKeyboardManager, editable, null, mockFlutterJNI);
+        testView,
+        client,
+        textInputChannel,
+        scribeChannel,
+        mockKeyboardManager,
+        editable,
+        null,
+        mockFlutterJNI);
   }
 
   private static class Emoji {

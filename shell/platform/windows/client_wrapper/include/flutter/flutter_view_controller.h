@@ -14,13 +14,6 @@
 #include "dart_project.h"
 #include "flutter_engine.h"
 #include "flutter_view.h"
-#include "plugin_registrar.h"
-#include "plugin_registry.h"
-
-#ifdef WINUWP
-#include <windows.applicationmodel.activation.h>
-#include <windows.ui.core.h>
-#endif
 
 namespace flutter {
 
@@ -31,27 +24,13 @@ namespace flutter {
 // methods in the C API directly, as this class will do that internally.
 class FlutterViewController {
  public:
-#ifndef WINUWP
   // Creates a FlutterView that can be parented into a Windows View hierarchy
   // either using HWNDs.
   //
-  // |dart_project| will be used to configure the engine backing this view.
-  explicit FlutterViewController(int width,
-                                 int height,
-                                 const DartProject& project);
-#else
-  // Creates a FlutterView that can be parented into a Windows View hierarchy
-  // either using CoreWindow.
+  // This also creates a new FlutterEngine.
   //
   // |dart_project| will be used to configure the engine backing this view.
-  // |IActivatedEventArgs| will be used to configure the engine switches.  Can
-  // be set to nullptr.
-  explicit FlutterViewController(
-      ABI::Windows::ApplicationModel::Core::CoreApplicationView*
-          applicationview,
-      ABI::Windows::ApplicationModel::Activation::IActivatedEventArgs* args,
-      const DartProject& project);
-#endif
+  FlutterViewController(int width, int height, const DartProject& project);
 
   virtual ~FlutterViewController();
 
@@ -59,13 +38,18 @@ class FlutterViewController {
   FlutterViewController(FlutterViewController const&) = delete;
   FlutterViewController& operator=(FlutterViewController const&) = delete;
 
+  // Returns the view controller's view ID.
+  FlutterViewId view_id() const;
+
   // Returns the engine running Flutter content in this view.
-  FlutterEngine* engine() { return engine_.get(); }
+  FlutterEngine* engine() const { return engine_.get(); }
 
   // Returns the view managed by this controller.
-  FlutterView* view() { return view_.get(); }
+  FlutterView* view() const { return view_.get(); }
 
-#ifndef WINUWP
+  // Requests new frame from the engine and repaints the view.
+  void ForceRedraw();
+
   // Allows the Flutter engine and any interested plugins an opportunity to
   // handle the given message.
   //
@@ -75,14 +59,13 @@ class FlutterViewController {
                                                   UINT message,
                                                   WPARAM wparam,
                                                   LPARAM lparam);
-#endif
 
  private:
   // Handle for interacting with the C API's view controller, if any.
   FlutterDesktopViewControllerRef controller_ = nullptr;
 
   // The backing engine
-  std::unique_ptr<FlutterEngine> engine_;
+  std::shared_ptr<FlutterEngine> engine_;
 
   // The owned FlutterView.
   std::unique_ptr<FlutterView> view_;

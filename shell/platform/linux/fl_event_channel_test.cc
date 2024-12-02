@@ -24,7 +24,8 @@ typedef struct {
 static FlEngine* make_mock_engine() {
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   g_autoptr(FlMockRenderer) renderer = fl_mock_renderer_new();
-  g_autoptr(FlEngine) engine = fl_engine_new(project, FL_RENDERER(renderer));
+  g_autoptr(FlEngine) engine =
+      fl_engine_new_with_renderer(project, FL_RENDERER(renderer));
   g_autoptr(GError) engine_error = nullptr;
   EXPECT_TRUE(fl_engine_start(engine, &engine_error));
   EXPECT_EQ(engine_error, nullptr);
@@ -66,7 +67,7 @@ static void cancel_channel(FlBinaryMessenger* messenger, FlValue* args) {
                                   nullptr, nullptr);
 }
 
-// Called when when the remote end starts listening on the channel.
+// Called when the remote end starts listening on the channel.
 static FlMethodErrorResponse* listen_listen_cb(FlEventChannel* channel,
                                                FlValue* args,
                                                gpointer user_data) {
@@ -82,7 +83,7 @@ TEST(FlEventChannelTest, Listen) {
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -98,7 +99,7 @@ TEST(FlEventChannelTest, Listen) {
   g_object_unref(channel);
 }
 
-// Called when when the remote end starts listening on the channel.
+// Called when the remote end starts listening on the channel.
 static FlMethodErrorResponse* listen_exception_listen_cb(
     FlEventChannel* channel,
     FlValue* args,
@@ -141,7 +142,7 @@ TEST(FlEventChannelTest, ListenException) {
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -161,7 +162,7 @@ TEST(FlEventChannelTest, ListenException) {
   g_object_unref(channel);
 }
 
-// Called when when the remote end cancels their subscription.
+// Called when the remote end cancels their subscription.
 static FlMethodErrorResponse* cancel_cancel_cb(FlEventChannel* channel,
                                                FlValue* args,
                                                gpointer user_data) {
@@ -177,7 +178,7 @@ TEST(FlEventChannelTest, Cancel) {
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -194,7 +195,7 @@ TEST(FlEventChannelTest, Cancel) {
   g_object_unref(channel);
 }
 
-// Called when when the remote end cancels their subscription.
+// Called when the remote end cancels their subscription.
 static FlMethodErrorResponse* cancel_exception_cancel_cb(
     FlEventChannel* channel,
     FlValue* args,
@@ -245,7 +246,7 @@ TEST(FlEventChannelTest, CancelException) {
   data.count = 0;
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -267,7 +268,7 @@ TEST(FlEventChannelTest, CancelException) {
   g_object_unref(channel);
 }
 
-// Called when when the remote end starts listening on the channel.
+// Called when the remote end starts listening on the channel.
 static FlMethodErrorResponse* args_listen_cb(FlEventChannel* channel,
                                              FlValue* args,
                                              gpointer user_data) {
@@ -277,7 +278,7 @@ static FlMethodErrorResponse* args_listen_cb(FlEventChannel* channel,
   return nullptr;
 }
 
-// Called when when the remote end cancels their subscription.
+// Called when the remote end cancels their subscription.
 static FlMethodErrorResponse* args_cancel_cb(FlEventChannel* channel,
                                              FlValue* args,
                                              gpointer user_data) {
@@ -294,7 +295,7 @@ TEST(FlEventChannelTest, Args) {
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -313,7 +314,7 @@ TEST(FlEventChannelTest, Args) {
   g_object_unref(channel);
 }
 
-// Called when when the remote end starts listening on the channel.
+// Called when the remote end starts listening on the channel.
 static FlMethodErrorResponse* send_events_listen_cb(FlEventChannel* channel,
                                                     FlValue* args,
                                                     gpointer user_data) {
@@ -370,7 +371,7 @@ TEST(FlEventChannelTest, Test) {
   data.count = 0;
 
   g_autoptr(FlEngine) engine = make_mock_engine();
-  FlBinaryMessenger* messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   FlEventChannel* channel = fl_event_channel_new(
       messenger, "test/standard-event", FL_METHOD_CODEC(codec));
@@ -389,4 +390,74 @@ TEST(FlEventChannelTest, Test) {
 
   // Manually unref because the compiler complains 'channel' is unused.
   g_object_unref(channel);
+}
+
+// Check can register an event channel with the same name as one previously
+// used.
+TEST(FlEventChannelTest, ReuseChannel) {
+  g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
+  TestData data;
+  data.loop = loop;
+  data.count = 0;
+
+  // Register an event channel.
+  g_autoptr(FlEngine) engine = make_mock_engine();
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  FlEventChannel* channel1 = fl_event_channel_new(
+      messenger, "test/standard-event", FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(channel1, send_events_listen_cb, nullptr,
+                                       &data, nullptr);
+
+  // Remove this channel
+  g_object_unref(channel1);
+
+  // Register a second channel with the same name.
+  g_autoptr(FlEventChannel) channel2 = fl_event_channel_new(
+      messenger, "test/standard-event", FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(channel2, send_events_listen_cb, nullptr,
+                                       &data, nullptr);
+
+  // Listen for events from the engine.
+  fl_binary_messenger_set_message_handler_on_channel(
+      messenger, "test/events", send_events_events_cb, &data, nullptr);
+
+  listen_channel(messenger, nullptr);
+  cancel_channel(messenger, nullptr);
+
+  // Blocks here until send_events_events_cb receives the last event.
+  g_main_loop_run(loop);
+}
+
+// Check can register an event channel replacing an existing one.
+TEST(FlEventChannelTest, ReplaceChannel) {
+  g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, 0);
+  TestData data;
+  data.loop = loop;
+  data.count = 0;
+
+  // Register an event channel.
+  g_autoptr(FlEngine) engine = make_mock_engine();
+  g_autoptr(FlBinaryMessenger) messenger = fl_binary_messenger_new(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  FlEventChannel* channel1 = fl_event_channel_new(
+      messenger, "test/standard-event", FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(channel1, send_events_listen_cb, nullptr,
+                                       &data, nullptr);
+
+  // Register a second channel with the same name.
+  g_autoptr(FlEventChannel) channel2 = fl_event_channel_new(
+      messenger, "test/standard-event", FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(channel2, send_events_listen_cb, nullptr,
+                                       &data, nullptr);
+
+  // Listen for events from the engine.
+  fl_binary_messenger_set_message_handler_on_channel(
+      messenger, "test/events", send_events_events_cb, &data, nullptr);
+
+  listen_channel(messenger, nullptr);
+  cancel_channel(messenger, nullptr);
+
+  // Blocks here until send_events_events_cb receives the last event.
+  g_main_loop_run(loop);
 }

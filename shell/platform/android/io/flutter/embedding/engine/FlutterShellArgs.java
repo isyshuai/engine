@@ -42,6 +42,13 @@ public class FlutterShellArgs {
   public static final String ARG_TRACE_SKIA_ALLOWLIST = "--trace-skia-allowlist=";
   public static final String ARG_KEY_TRACE_SYSTRACE = "trace-systrace";
   public static final String ARG_TRACE_SYSTRACE = "--trace-systrace";
+  public static final String ARG_KEY_TRACE_TO_FILE = "trace-to-file";
+  public static final String ARG_TRACE_TO_FILE = "--trace-to-file";
+  public static final String ARG_KEY_TOGGLE_IMPELLER = "enable-impeller";
+  public static final String ARG_ENABLE_IMPELLER = "--enable-impeller=true";
+  public static final String ARG_DISABLE_IMPELLER = "--enable-impeller=false";
+  public static final String ARG_KEY_ENABLE_VULKAN_VALIDATION = "enable-vulkan-validation";
+  public static final String ARG_ENABLE_VULKAN_VALIDATION = "--enable-vulkan-validation";
   public static final String ARG_KEY_DUMP_SHADER_SKP_ON_SHADER_COMPILATION =
       "dump-skp-on-shader-compilation";
   public static final String ARG_DUMP_SHADER_SKP_ON_SHADER_COMPILATION =
@@ -52,8 +59,11 @@ public class FlutterShellArgs {
   public static final String ARG_PURGE_PERSISTENT_CACHE = "--purge-persistent-cache";
   public static final String ARG_KEY_VERBOSE_LOGGING = "verbose-logging";
   public static final String ARG_VERBOSE_LOGGING = "--verbose-logging";
+  public static final String ARG_KEY_VM_SERVICE_PORT = "vm-service-port";
+  public static final String ARG_VM_SERVICE_PORT = "--vm-service-port=";
+  // TODO(bkonyi): remove once flutter_tools no longer uses this option.
+  // See https://github.com/dart-lang/sdk/issues/50233
   public static final String ARG_KEY_OBSERVATORY_PORT = "observatory-port";
-  public static final String ARG_OBSERVATORY_PORT = "--observatory-port=";
   public static final String ARG_KEY_DART_FLAGS = "dart-flags";
   public static final String ARG_DART_FLAGS = "--dart-flags";
 
@@ -62,8 +72,6 @@ public class FlutterShellArgs {
     // Before adding more entries to this list, consider that arbitrary
     // Android applications can generate intents with extra data and that
     // there are many security-sensitive args in the binary.
-    // TODO(mattcarroll): I left this warning as-is, but we should clarify what exactly this warning
-    // is warning against.
     ArrayList<String> args = new ArrayList<>();
 
     if (intent.getBooleanExtra(ARG_KEY_TRACE_STARTUP, false)) {
@@ -72,9 +80,16 @@ public class FlutterShellArgs {
     if (intent.getBooleanExtra(ARG_KEY_START_PAUSED, false)) {
       args.add(ARG_START_PAUSED);
     }
-    final int observatoryPort = intent.getIntExtra(ARG_KEY_OBSERVATORY_PORT, 0);
-    if (observatoryPort > 0) {
-      args.add(ARG_OBSERVATORY_PORT + Integer.toString(observatoryPort));
+    int vmServicePort = intent.getIntExtra(ARG_KEY_VM_SERVICE_PORT, 0);
+    if (vmServicePort > 0) {
+      args.add(ARG_VM_SERVICE_PORT + Integer.toString(vmServicePort));
+    } else {
+      // TODO(bkonyi): remove once flutter_tools no longer uses this option.
+      // See https://github.com/dart-lang/sdk/issues/50233
+      vmServicePort = intent.getIntExtra(ARG_KEY_OBSERVATORY_PORT, 0);
+      if (vmServicePort > 0) {
+        args.add(ARG_VM_SERVICE_PORT + Integer.toString(vmServicePort));
+      }
     }
     if (intent.getBooleanExtra(ARG_KEY_DISABLE_SERVICE_AUTH_CODES, false)) {
       args.add(ARG_DISABLE_SERVICE_AUTH_CODES);
@@ -104,6 +119,19 @@ public class FlutterShellArgs {
     if (intent.getBooleanExtra(ARG_KEY_TRACE_SYSTRACE, false)) {
       args.add(ARG_TRACE_SYSTRACE);
     }
+    if (intent.hasExtra(ARG_KEY_TRACE_TO_FILE)) {
+      args.add(ARG_TRACE_TO_FILE + "=" + intent.getStringExtra(ARG_KEY_TRACE_TO_FILE));
+    }
+    if (intent.hasExtra(ARG_KEY_TOGGLE_IMPELLER)) {
+      if (intent.getBooleanExtra(ARG_KEY_TOGGLE_IMPELLER, false)) {
+        args.add(ARG_ENABLE_IMPELLER);
+      } else {
+        args.add(ARG_DISABLE_IMPELLER);
+      }
+    }
+    if (intent.getBooleanExtra(ARG_KEY_ENABLE_VULKAN_VALIDATION, false)) {
+      args.add(ARG_ENABLE_VULKAN_VALIDATION);
+    }
     if (intent.getBooleanExtra(ARG_KEY_DUMP_SHADER_SKP_ON_SHADER_COMPILATION, false)) {
       args.add(ARG_DUMP_SHADER_SKP_ON_SHADER_COMPILATION);
     }
@@ -118,7 +146,7 @@ public class FlutterShellArgs {
     }
 
     // NOTE: all flags provided with this argument are subject to filtering
-    // based on a a list of allowed flags in shell/common/switches.cc. If any
+    // based on a list of allowed flags in shell/common/switches.cc. If any
     // flag provided is not allowed, the process will immediately terminate.
     if (intent.hasExtra(ARG_KEY_DART_FLAGS)) {
       args.add(ARG_DART_FLAGS + "=" + intent.getStringExtra(ARG_KEY_DART_FLAGS));

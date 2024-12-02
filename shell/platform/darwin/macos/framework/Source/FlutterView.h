@@ -2,18 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERVIEW_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERVIEW_H_
+
 #import <Cocoa/Cocoa.h>
 
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterResizableBackingStoreProvider.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterSurfaceManager.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterThreadSynchronizer.h"
+
+#include <stdint.h>
 
 /**
- * Listener for view resizing.
+ * Delegate for FlutterView.
  */
-@protocol FlutterViewReshapeListener <NSObject>
+@protocol FlutterViewDelegate <NSObject>
 /**
  * Called when the view's backing store changes size.
  */
 - (void)viewDidReshape:(nonnull NSView*)view;
+
+/**
+ * Called to determine whether the view should accept first responder status.
+ */
+- (BOOL)viewShouldAcceptFirstResponder:(nonnull NSView*)view;
+
 @end
 
 /**
@@ -27,17 +39,10 @@
  */
 - (nullable instancetype)initWithMTLDevice:(nonnull id<MTLDevice>)device
                               commandQueue:(nonnull id<MTLCommandQueue>)commandQueue
-                           reshapeListener:(nonnull id<FlutterViewReshapeListener>)reshapeListener
+                                  delegate:(nonnull id<FlutterViewDelegate>)delegate
+                        threadSynchronizer:(nonnull FlutterThreadSynchronizer*)threadSynchronizer
+                            viewIdentifier:(FlutterViewIdentifier)viewIdentifier
     NS_DESIGNATED_INITIALIZER;
-
-- (nullable instancetype)initWithFrame:(NSRect)frame
-                           mainContext:(nonnull NSOpenGLContext*)mainContext
-                       reshapeListener:(nonnull id<FlutterViewReshapeListener>)reshapeListener
-    NS_DESIGNATED_INITIALIZER;
-
-- (nullable instancetype)initWithMainContext:(nonnull NSOpenGLContext*)mainContext
-                             reshapeListener:
-                                 (nonnull id<FlutterViewReshapeListener>)reshapeListener;
 
 - (nullable instancetype)initWithFrame:(NSRect)frameRect
                            pixelFormat:(nullable NSOpenGLPixelFormat*)format NS_UNAVAILABLE;
@@ -46,20 +51,27 @@
 - (nonnull instancetype)init NS_UNAVAILABLE;
 
 /**
- * Flushes the OpenGL context and flips the surfaces. Expected to be called on raster thread.
+ * Returns SurfaceManager for this view. SurfaceManager is responsible for
+ * providing and presenting render surfaces.
  */
-- (void)present;
+@property(readonly, nonatomic, nonnull) FlutterSurfaceManager* surfaceManager;
 
 /**
- * Ensures that a backing store with requested size exists and returns the descriptor. Expected to
- * be called on raster thread.
+ * By default, the `FlutterSurfaceManager` creates two layers to manage Flutter
+ * content, the content layer and containing layer. To set the native background
+ * color, onto which the Flutter content is drawn, call this method with the
+ * NSColor which you would like to override the default, black background color
+ * with.
  */
-- (nonnull FlutterRenderBackingStore*)backingStoreForSize:(CGSize)size;
+- (void)setBackgroundColor:(nonnull NSColor*)color;
 
 /**
- * Must be called when shutting down. Unblocks raster thread and prevents any further
- * synchronization.
+ * Called from the engine to notify the view that mouse cursor was updated while
+ * the mouse is over the view. The view is responsible from restoring the cursor
+ * when the mouse enters the view from another subview.
  */
-- (void)shutdown;
+- (void)didUpdateMouseCursor:(nonnull NSCursor*)cursor;
 
 @end
+
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERVIEW_H_

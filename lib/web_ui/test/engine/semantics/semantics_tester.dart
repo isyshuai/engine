@@ -3,34 +3,15 @@
 // found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
-import 'package:ui/src/engine.dart' show flutterViewEmbedder, toMatrix32;
-import 'package:ui/src/engine/browser_detection.dart';
-import 'package:ui/src/engine/host_node.dart';
+import 'package:ui/src/engine/dom.dart';
 import 'package:ui/src/engine/semantics.dart';
-import 'package:ui/src/engine/util.dart';
 import 'package:ui/src/engine/vector_math.dart';
 import 'package:ui/ui.dart' as ui;
 
-import '../../matchers.dart';
-
-/// Gets the DOM host where the Flutter app is being rendered.
-///
-/// This function returns the correct host for the flutter app under testing,
-/// so we don't have to hardcode html.document across the test. (The host of a
-/// normal flutter app used to be html.document, but now that the app is wrapped
-/// in a Shadow DOM, that's not the case anymore.)
-HostNode get appHostNode => flutterViewEmbedder.glassPaneShadow!;
-
-/// CSS style applied to the root of the semantics tree.
-// TODO(yjbanov): this should be handled internally by [expectSemanticsTree].
-//                No need for every test to inject it.
-final String rootSemanticStyle = browserEngine != BrowserEngine.edge
-  ? 'filter: opacity(0%); color: rgba(0, 0, 0, 0)'
-  : 'color: rgba(0, 0, 0, 0); filter: opacity(0%)';
+import '../../common/matchers.dart';
 
 /// A convenience wrapper of the semantics API for building and inspecting the
 /// semantics tree in unit tests.
@@ -51,6 +32,7 @@ class SemanticsTester {
     int flags = 0,
     bool? hasCheckedState,
     bool? isChecked,
+    bool? isSelectable,
     bool? isSelected,
     bool? isButton,
     bool? isLink,
@@ -94,6 +76,7 @@ class SemanticsTester {
     bool? hasPaste,
     bool? hasDidGainAccessibilityFocus,
     bool? hasDidLoseAccessibilityFocus,
+    bool? hasFocus,
     bool? hasCustomAction,
     bool? hasDismiss,
     bool? hasMoveCursorForwardByWord,
@@ -114,6 +97,7 @@ class SemanticsTester {
     double? elevation,
     double? thickness,
     ui.Rect? rect,
+    String? identifier,
     String? label,
     List<ui.StringAttribute>? labelAttributes,
     String? hint,
@@ -129,155 +113,163 @@ class SemanticsTester {
     Float64List? transform,
     Int32List? additionalActions,
     List<SemanticsNodeUpdate>? children,
+    int? headingLevel,
+    String? linkUrl,
   }) {
     // Flags
-    if (hasCheckedState == true) {
+    if (hasCheckedState ?? false) {
       flags |= ui.SemanticsFlag.hasCheckedState.index;
     }
-    if (isChecked == true) {
+    if (isChecked ?? false) {
       flags |= ui.SemanticsFlag.isChecked.index;
     }
-    if (isSelected == true) {
+    if (isSelectable ?? false) {
+      flags |= ui.SemanticsFlag.hasSelectedState.index;
+    }
+    if (isSelected ?? false) {
       flags |= ui.SemanticsFlag.isSelected.index;
     }
-    if (isButton == true) {
+    if (isButton ?? false) {
       flags |= ui.SemanticsFlag.isButton.index;
     }
-    if (isLink == true) {
+    if (isLink ?? false) {
       flags |= ui.SemanticsFlag.isLink.index;
     }
-    if (isTextField == true) {
+    if (isTextField ?? false) {
       flags |= ui.SemanticsFlag.isTextField.index;
     }
-    if (isReadOnly == true) {
+    if (isReadOnly ?? false) {
       flags |= ui.SemanticsFlag.isReadOnly.index;
     }
-    if (isFocusable == true) {
+    if (isFocusable ?? false) {
       flags |= ui.SemanticsFlag.isFocusable.index;
     }
-    if (isFocused == true) {
+    if (isFocused ?? false) {
       flags |= ui.SemanticsFlag.isFocused.index;
     }
-    if (hasEnabledState == true) {
+    if (hasEnabledState ?? false) {
       flags |= ui.SemanticsFlag.hasEnabledState.index;
     }
-    if (isEnabled == true) {
+    if (isEnabled ?? false) {
       flags |= ui.SemanticsFlag.isEnabled.index;
     }
-    if (isInMutuallyExclusiveGroup == true) {
+    if (isInMutuallyExclusiveGroup ?? false) {
       flags |= ui.SemanticsFlag.isInMutuallyExclusiveGroup.index;
     }
-    if (isHeader == true) {
+    if (isHeader ?? false) {
       flags |= ui.SemanticsFlag.isHeader.index;
     }
-    if (isObscured == true) {
+    if (isObscured ?? false) {
       flags |= ui.SemanticsFlag.isObscured.index;
     }
-    if (scopesRoute == true) {
+    if (scopesRoute ?? false) {
       flags |= ui.SemanticsFlag.scopesRoute.index;
     }
-    if (namesRoute == true) {
+    if (namesRoute ?? false) {
       flags |= ui.SemanticsFlag.namesRoute.index;
     }
-    if (isHidden == true) {
+    if (isHidden ?? false) {
       flags |= ui.SemanticsFlag.isHidden.index;
     }
-    if (isImage == true) {
+    if (isImage ?? false) {
       flags |= ui.SemanticsFlag.isImage.index;
     }
-    if (isLiveRegion == true) {
+    if (isLiveRegion ?? false) {
       flags |= ui.SemanticsFlag.isLiveRegion.index;
     }
-    if (hasToggledState == true) {
+    if (hasToggledState ?? false) {
       flags |= ui.SemanticsFlag.hasToggledState.index;
     }
-    if (isToggled == true) {
+    if (isToggled ?? false) {
       flags |= ui.SemanticsFlag.isToggled.index;
     }
-    if (hasImplicitScrolling == true) {
+    if (hasImplicitScrolling ?? false) {
       flags |= ui.SemanticsFlag.hasImplicitScrolling.index;
     }
-    if (isMultiline == true) {
+    if (isMultiline ?? false) {
       flags |= ui.SemanticsFlag.isMultiline.index;
     }
-    if (isSlider == true) {
+    if (isSlider ?? false) {
       flags |= ui.SemanticsFlag.isSlider.index;
     }
-    if (isKeyboardKey == true) {
+    if (isKeyboardKey ?? false) {
       flags |= ui.SemanticsFlag.isKeyboardKey.index;
     }
 
     // Actions
-    if (hasTap == true) {
+    if (hasTap ?? false) {
       actions |= ui.SemanticsAction.tap.index;
     }
-    if (hasLongPress == true) {
+    if (hasLongPress ?? false) {
       actions |= ui.SemanticsAction.longPress.index;
     }
-    if (hasScrollLeft == true) {
+    if (hasScrollLeft ?? false) {
       actions |= ui.SemanticsAction.scrollLeft.index;
     }
-    if (hasScrollRight == true) {
+    if (hasScrollRight ?? false) {
       actions |= ui.SemanticsAction.scrollRight.index;
     }
-    if (hasScrollUp == true) {
+    if (hasScrollUp ?? false) {
       actions |= ui.SemanticsAction.scrollUp.index;
     }
-    if (hasScrollDown == true) {
+    if (hasScrollDown ?? false) {
       actions |= ui.SemanticsAction.scrollDown.index;
     }
-    if (hasIncrease == true) {
+    if (hasIncrease ?? false) {
       actions |= ui.SemanticsAction.increase.index;
     }
-    if (hasDecrease == true) {
+    if (hasDecrease ?? false) {
       actions |= ui.SemanticsAction.decrease.index;
     }
-    if (hasShowOnScreen == true) {
+    if (hasShowOnScreen ?? false) {
       actions |= ui.SemanticsAction.showOnScreen.index;
     }
-    if (hasMoveCursorForwardByCharacter == true) {
+    if (hasMoveCursorForwardByCharacter ?? false) {
       actions |= ui.SemanticsAction.moveCursorForwardByCharacter.index;
     }
-    if (hasMoveCursorBackwardByCharacter == true) {
+    if (hasMoveCursorBackwardByCharacter ?? false) {
       actions |= ui.SemanticsAction.moveCursorBackwardByCharacter.index;
     }
-    if (hasSetSelection == true) {
+    if (hasSetSelection ?? false) {
       actions |= ui.SemanticsAction.setSelection.index;
     }
-    if (hasCopy == true) {
+    if (hasCopy ?? false) {
       actions |= ui.SemanticsAction.copy.index;
     }
-    if (hasCut == true) {
+    if (hasCut ?? false) {
       actions |= ui.SemanticsAction.cut.index;
     }
-    if (hasPaste == true) {
+    if (hasPaste ?? false) {
       actions |= ui.SemanticsAction.paste.index;
     }
-    if (hasDidGainAccessibilityFocus == true) {
+    if (hasDidGainAccessibilityFocus ?? false) {
       actions |= ui.SemanticsAction.didGainAccessibilityFocus.index;
     }
-    if (hasDidLoseAccessibilityFocus == true) {
+    if (hasDidLoseAccessibilityFocus ?? false) {
       actions |= ui.SemanticsAction.didLoseAccessibilityFocus.index;
     }
-    if (hasCustomAction == true) {
+    if (hasFocus ?? false) {
+      actions |= ui.SemanticsAction.focus.index;
+    }
+    if (hasCustomAction ?? false) {
       actions |= ui.SemanticsAction.customAction.index;
     }
-    if (hasDismiss == true) {
+    if (hasDismiss ?? false) {
       actions |= ui.SemanticsAction.dismiss.index;
     }
-    if (hasMoveCursorForwardByWord == true) {
+    if (hasMoveCursorForwardByWord ?? false) {
       actions |= ui.SemanticsAction.moveCursorForwardByWord.index;
     }
-    if (hasMoveCursorBackwardByWord == true) {
+    if (hasMoveCursorBackwardByWord ?? false) {
       actions |= ui.SemanticsAction.moveCursorBackwardByWord.index;
     }
-    if (hasSetText == true) {
+    if (hasSetText ?? false) {
       actions |= ui.SemanticsAction.setText.index;
     }
 
     // Other attributes
     ui.Rect childRect(SemanticsNodeUpdate child) {
-      return transformRect(Matrix4.fromFloat32List(child.transform), child.rect);
+      return Matrix4.fromFloat32List(child.transform).transformRect(child.rect);
     }
 
     // If a rect is not provided, generate one than covers all children.
@@ -304,13 +296,14 @@ class SemanticsTester {
       currentValueLength: currentValueLength ?? 0,
       textSelectionBase: textSelectionBase ?? 0,
       textSelectionExtent: textSelectionExtent ?? 0,
-      platformViewId: platformViewId ?? 0,
+      platformViewId: platformViewId ?? -1,
       scrollChildren: scrollChildren ?? 0,
       scrollIndex: scrollIndex ?? 0,
       scrollPosition: scrollPosition ?? 0,
       scrollExtentMax: scrollExtentMax ?? 0,
       scrollExtentMin: scrollExtentMin ?? 0,
       rect: effectiveRect,
+      identifier: identifier ?? '',
       label: label ?? '',
       labelAttributes: labelAttributes ?? const <ui.StringAttribute>[],
       hint: hint ?? '',
@@ -328,6 +321,8 @@ class SemanticsTester {
       childrenInTraversalOrder: childIds,
       childrenInHitTestOrder: childIds,
       additionalActions: additionalActions ?? Int32List(0),
+      headingLevel: headingLevel ?? 0,
+      linkUrl: linkUrl,
     );
     _nodeUpdates.add(update);
     return update;
@@ -347,49 +342,37 @@ class SemanticsTester {
     return owner.debugSemanticsTree![id]!;
   }
 
-  /// Locates the role manager of the semantics object with the give [id].
-  RoleManager? getRoleManager(int id, Role role) {
-    return getSemanticsObject(id).debugRoleManagerFor(role);
+  /// Locates the [SemanticTextField] role of the semantics object with the give [id].
+  SemanticTextField getTextField(int id) {
+    return getSemanticsObject(id).semanticRole! as SemanticTextField;
   }
 
-  /// Locates the [TextField] role manager of the semantics object with the give [id].
-  TextField getTextField(int id) {
-    return getRoleManager(id, Role.textField)! as TextField;
+  void expectSemantics(String semanticsHtml) {
+    expectSemanticsTree(owner, semanticsHtml);
   }
 }
 
 /// Verifies the HTML structure of the current semantics tree.
-void expectSemanticsTree(String semanticsHtml) {
+void expectSemanticsTree(EngineSemanticsOwner owner, String semanticsHtml) {
   expect(
-    canonicalizeHtml(appHostNode.querySelector('flt-semantics')!.outerHtml!),
-    canonicalizeHtml(semanticsHtml),
+    owner.semanticsHost.children.single,
+    hasHtml(semanticsHtml),
   );
 }
 
 /// Finds the first HTML element in the semantics tree used for scrolling.
-html.Element? findScrollable() {
-  return appHostNode.querySelectorAll('flt-semantics').cast<html.Element?>().firstWhere(
-        (html.Element? element) =>
-            element!.style.overflow == 'hidden' ||
-            element.style.overflowY == 'scroll' ||
-            element.style.overflowX == 'scroll',
-        orElse: () => null,
-      );
+DomElement findScrollable(EngineSemanticsOwner owner) {
+  return owner.semanticsHost.querySelectorAll('flt-semantics').singleWhere(
+    (DomElement? element) {
+      return element!.style.overflow == 'hidden' ||
+        element.style.overflowY == 'scroll' ||
+        element.style.overflowX == 'scroll';
+    },
+  );
 }
 
-/// Logs semantics actions dispatched to [ui.window].
+/// Logs semantics actions dispatched to [ui.PlatformDispatcher].
 class SemanticsActionLogger {
-  late StreamController<int> _idLogController;
-  late StreamController<ui.SemanticsAction> _actionLogController;
-
-  /// Semantics object ids that dispatched the actions.
-  Stream<int> get idLog => _idLog;
-  late Stream<int> _idLog;
-
-  /// The actions that were dispatched to [ui.window].
-  Stream<ui.SemanticsAction> get actionLog => _actionLog;
-  late Stream<ui.SemanticsAction> _actionLog;
-
   SemanticsActionLogger() {
     _idLogController = StreamController<int>();
     _actionLogController = StreamController<ui.SemanticsAction>();
@@ -401,13 +384,29 @@ class SemanticsActionLogger {
     // fired.
     final Zone testZone = Zone.current;
 
-    ui.window.onSemanticsAction =
-        (int id, ui.SemanticsAction action, ByteData? args) {
-      _idLogController.add(id);
-      _actionLogController.add(action);
+    ui.PlatformDispatcher.instance.onSemanticsActionEvent =
+        (ui.SemanticsActionEvent event) {
+      _idLogController.add(event.nodeId);
+      _actionLogController.add(event.type);
       testZone.run(() {
-        expect(args, null);
+        expect(event.arguments, null);
       });
     };
   }
+
+  late StreamController<int> _idLogController;
+  late StreamController<ui.SemanticsAction> _actionLogController;
+
+  /// Semantics object ids that dispatched the actions.
+  Stream<int> get idLog => _idLog;
+  late Stream<int> _idLog;
+
+  /// The actions that were dispatched to [ui.PlatformDispatcher].
+  Stream<ui.SemanticsAction> get actionLog => _actionLog;
+  late Stream<ui.SemanticsAction> _actionLog;
+}
+
+extension SemanticRoleExtension on SemanticRole {
+  /// Types of semantics behaviors used by this role.
+  List<Type> get debugSemanticBehaviorTypes => behaviors?.map((behavior) => behavior.runtimeType).toList() ?? const <Type>[];
 }

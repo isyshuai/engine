@@ -4,18 +4,17 @@
 
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterView.h"
 
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterRenderingBackend.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterResizeSynchronizer.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterSurfaceManager.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/MacOSGLContextSwitch.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterThreadSynchronizer.h"
 
-#import <OpenGL/gl.h>
 #import <QuartzCore/QuartzCore.h>
 
-@interface FlutterView () {
-  __weak id<FlutterViewReshapeListener> _reshapeListener;
-  FlutterResizeSynchronizer* _resizeSynchronizer;
-  id<FlutterResizableBackingStoreProvider> _resizableBackingStoreProvider;
+@interface FlutterView () <FlutterSurfaceManagerDelegate> {
+  FlutterViewIdentifier _viewIdentifier;
+  __weak id<FlutterViewDelegate> _viewDelegate;
+  FlutterThreadSynchronizer* _threadSynchronizer;
+  FlutterSurfaceManager* _surfaceManager;
+  NSCursor* _lastCursor;
 }
 
 @end
@@ -24,60 +23,44 @@
 
 - (instancetype)initWithMTLDevice:(id<MTLDevice>)device
                      commandQueue:(id<MTLCommandQueue>)commandQueue
-                  reshapeListener:(id<FlutterViewReshapeListener>)reshapeListener {
+                         delegate:(id<FlutterViewDelegate>)delegate
+               threadSynchronizer:(FlutterThreadSynchronizer*)threadSynchronizer
+                   viewIdentifier:(FlutterViewIdentifier)viewIdentifier {
   self = [super initWithFrame:NSZeroRect];
   if (self) {
     [self setWantsLayer:YES];
+    [self setBackgroundColor:[NSColor blackColor]];
     [self setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawDuringViewResize];
-    _reshapeListener = reshapeListener;
-    _resizableBackingStoreProvider =
-        [[FlutterMetalResizableBackingStoreProvider alloc] initWithDevice:device
-                                                             commandQueue:commandQueue
-                                                                    layer:self.layer];
-    _resizeSynchronizer =
-        [[FlutterResizeSynchronizer alloc] initWithDelegate:_resizableBackingStoreProvider];
+    _viewIdentifier = viewIdentifier;
+    _viewDelegate = delegate;
+    _threadSynchronizer = threadSynchronizer;
+    _surfaceManager = [[FlutterSurfaceManager alloc] initWithDevice:device
+                                                       commandQueue:commandQueue
+                                                              layer:self.layer
+                                                           delegate:self];
   }
   return self;
 }
 
-- (instancetype)initWithMainContext:(NSOpenGLContext*)mainContext
-                    reshapeListener:(id<FlutterViewReshapeListener>)reshapeListener {
-  return [self initWithFrame:NSZeroRect mainContext:mainContext reshapeListener:reshapeListener];
+- (void)onPresent:(CGSize)frameSize withBlock:(dispatch_block_t)block {
+  [_threadSynchronizer performCommitForView:_viewIdentifier size:frameSize notify:block];
 }
 
-- (instancetype)initWithFrame:(NSRect)frame
-                  mainContext:(NSOpenGLContext*)mainContext
-              reshapeListener:(id<FlutterViewReshapeListener>)reshapeListener {
-  self = [super initWithFrame:frame];
-  if (self) {
-    [self setWantsLayer:YES];
-    _reshapeListener = reshapeListener;
-    _resizableBackingStoreProvider =
-        [[FlutterOpenGLResizableBackingStoreProvider alloc] initWithMainContext:mainContext
-                                                                          layer:self.layer];
-    _resizeSynchronizer =
-        [[FlutterResizeSynchronizer alloc] initWithDelegate:_resizableBackingStoreProvider];
-  }
-  return self;
-}
-
-- (FlutterRenderBackingStore*)backingStoreForSize:(CGSize)size {
-  if ([_resizeSynchronizer shouldEnsureSurfaceForSize:size]) {
-    [_resizableBackingStoreProvider onBackingStoreResized:size];
-  }
-  return [_resizableBackingStoreProvider backingStore];
-}
-
-- (void)present {
-  [_resizeSynchronizer requestCommit];
+- (FlutterSurfaceManager*)surfaceManager {
+  return _surfaceManager;
 }
 
 - (void)reshaped {
   CGSize scaledSize = [self convertSizeToBacking:self.bounds.size];
-  [_resizeSynchronizer beginResize:scaledSize
-                            notify:^{
-                              [_reshapeListener viewDidReshape:self];
-                            }];
+  [_threadSynchronizer beginResizeForView:_viewIdentifier
+                                     size:scaledSize
+                                   notify:^{
+                                     [_viewDelegate viewDidReshape:self];
+                                   }];
+}
+
+- (void)setBackgroundColor:(NSColor*)color {
+  self.layer.backgroundColor = color.CGColor;
 }
 
 #pragma mark - NSView overrides
@@ -98,19 +81,59 @@
   return YES;
 }
 
-- (BOOL)acceptsFirstResponder {
+/**
+ * Declares that the initial mouse-down when the view is not in focus will send an event to the
+ * view.
+ */
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
   return YES;
+}
+
+- (BOOL)acceptsFirstResponder {
+  // This is to ensure that FlutterView does not take first responder status from TextInputPlugin
+  // on mouse clicks.
+  return [_viewDelegate viewShouldAcceptFirstResponder:self];
+}
+
+- (void)didUpdateMouseCursor:(NSCursor*)cursor {
+  _lastCursor = cursor;
+}
+
+// Restores mouse cursor. There are few cases when this is needed and framework will not handle this
+// automatically:
+// - When mouse cursor leaves subview of FlutterView (technically still within bound of FlutterView
+// tracking area so the framework won't be notified)
+// - When context menu above FlutterView is closed. Context menu will change current cursor to arrow
+// and will not restore it back.
+- (void)cursorUpdate:(NSEvent*)event {
+  // Make sure to not override cursor when over a platform view.
+  NSPoint mouseLocation = [[self superview] convertPoint:event.locationInWindow fromView:nil];
+  NSView* hitTestView = [self hitTest:mouseLocation];
+  if (hitTestView != self) {
+    return;
+  }
+  [_lastCursor set];
+  // It is possible that there is a platform view with NSTrackingArea below flutter content.
+  // This could override the mouse cursor as a result of mouse move event. There is no good way
+  // to prevent that short of swizzling [NSCursor set], so as a workaround force flutter cursor
+  // in next runloop turn. This is not ideal, as it may cause the cursor flicker a bit.
+  [[NSRunLoop currentRunLoop] performBlock:^{
+    [_lastCursor set];
+  }];
 }
 
 - (void)viewDidChangeBackingProperties {
   [super viewDidChangeBackingProperties];
   // Force redraw
-  [_reshapeListener viewDidReshape:self];
+  [_viewDelegate viewDidReshape:self];
 }
 
-- (void)shutdown {
-  [_resizeSynchronizer shutdown];
+- (BOOL)layer:(CALayer*)layer
+    shouldInheritContentsScale:(CGFloat)newScale
+                    fromWindow:(NSWindow*)window {
+  return YES;
 }
+
 #pragma mark - NSAccessibility overrides
 
 - (BOOL)isAccessibilityElement {

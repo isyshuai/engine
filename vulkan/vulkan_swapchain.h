@@ -9,11 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include "flutter/fml/compiler_specific.h"
 #include "flutter/fml/macros.h"
+#include "flutter/vulkan/procs/vulkan_handle.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "vulkan_handle.h"
 
 namespace vulkan {
 
@@ -60,7 +59,7 @@ class VulkanSwapchain {
 
   SkISize GetSize() const;
 
-#if OS_ANDROID
+#if FML_OS_ANDROID
  private:
   const VulkanProcTable& vk;
   const VulkanDevice& device_;
@@ -79,7 +78,7 @@ class VulkanSwapchain {
 
   bool CreateSwapchainImages(GrDirectContext* skia_context,
                              SkColorType color_type,
-                             sk_sp<SkColorSpace> color_space,
+                             const sk_sp<SkColorSpace>& color_space,
                              VkImageUsageFlags usage_flags);
 
   sk_sp<SkSurface> CreateSkiaSurface(GrDirectContext* skia_context,
@@ -90,7 +89,7 @@ class VulkanSwapchain {
                                      sk_sp<SkColorSpace> color_space) const;
 
   VulkanBackbuffer* GetNextBackbuffer();
-#endif  // OS_ANDROID
+#endif  // FML_OS_ANDROID
 
   FML_DISALLOW_COPY_AND_ASSIGN(VulkanSwapchain);
 };

@@ -1,19 +1,15 @@
 apply plugin: 'com.android.application'
-apply plugin: 'com.facebook.testing.screenshot'
 apply plugin: 'kotlin-android'
 
-screenshots {
-    failureDir = "${rootProject.buildDir}/reports/diff_failures"
-    recordDir = "${rootProject.projectDir}/reports/screenshots"
-}
-
 android {
+    namespace = "dev.flutter.scenarios"
     lintOptions {
         abortOnError true
         checkAllWarnings true
         showAll true
         warningsAsErrors true
         checkTestSources true
+        textOutput 'stdout'
         htmlReport false
         xmlReport true
         xmlOutput file("${rootProject.buildDir}/reports/lint-results.xml")
@@ -23,16 +19,16 @@ android {
         // The others are irrelevant for a test application.
         disable 'UnpackedNativeCode','MissingApplicationIcon','GoogleAppIndexingApiWarning','GoogleAppIndexingWarning','GradleDependency','NewerVersionAvailable','Registered'
     }
-    buildToolsVersion = '31.0.0'
-    compileSdkVersion 31
+    buildToolsVersion = '35.0.0-rc4'
+    compileSdk 35
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
     defaultConfig {
         applicationId 'dev.flutter.scenarios'
-        minSdkVersion 18
-        targetSdkVersion 31
+        minSdkVersion 21
+        targetSdkVersion 35
         versionCode 1
         versionName '1.0'
         testInstrumentationRunner 'dev.flutter.TestRunner'
@@ -62,13 +58,14 @@ dependencies {
     if (project.hasProperty('flutter_jar')) {
         implementation files(project.property('flutter_jar'))
     }
-    implementation 'com.facebook.testing.screenshot:layout-hierarchy-common:0.12.0'
     implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
     implementation 'com.google.android.material:material:1.0.0'
+    implementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'junit:junit:4.12'
     androidTestImplementation 'androidx.test:runner:1.2.0'
     androidTestImplementation 'androidx.test:rules:1.2.0'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
+    androidTestImplementation 'com.google.guava:guava:30.1-android'
 
     def leakcanary_version = '2.7'
     androidTestImplementation "com.squareup.leakcanary:leakcanary-android:$leakcanary_version"
@@ -85,7 +82,7 @@ configureDependencies(new File(rootDir, '../../..')) { dependency ->
 
 tasks.register('generateLockfiles') {
     rootProject.subprojects.each { subproject ->
-        def gradle = "${rootProject.projectDir}/../../../../gradle/bin/gradle"
+        def gradle = "${rootProject.projectDir}/../../../third_party/gradle/bin/gradle"
         rootProject.exec {
             workingDir rootProject.projectDir
             executable gradle

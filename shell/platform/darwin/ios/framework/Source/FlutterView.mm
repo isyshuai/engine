@@ -4,21 +4,17 @@
 
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterView.h"
 
-#include "flutter/common/settings.h"
-#include "flutter/common/task_runners.h"
-#include "flutter/flow/layers/layer_tree.h"
 #include "flutter/fml/platform/darwin/cf_utils.h"
-#include "flutter/fml/synchronization/waitable_event.h"
-#include "flutter/fml/trace_event.h"
-#include "flutter/shell/common/platform_view.h"
-#include "flutter/shell/common/rasterizer.h"
-#import "flutter/shell/platform/darwin/ios/framework/Source/FlutterViewController_Internal.h"
-#import "flutter/shell/platform/darwin/ios/ios_surface_gl.h"
-#import "flutter/shell/platform/darwin/ios/ios_surface_software.h"
-#include "third_party/skia/include/utils/mac/SkCGUtils.h"
+#import "flutter/shell/platform/darwin/ios/framework/Source/SemanticsObject.h"
+
+FLUTTER_ASSERT_ARC
+
+@interface FlutterView ()
+@property(nonatomic, weak) id<FlutterViewEngineDelegate> delegate;
+@end
 
 @implementation FlutterView {
-  id<FlutterViewEngineDelegate> _delegate;
+  BOOL _isWideGamutEnabled;
 }
 
 - (instancetype)init {
@@ -36,10 +32,42 @@
   return nil;
 }
 
-- (instancetype)initWithDelegate:(id<FlutterViewEngineDelegate>)delegate opaque:(BOOL)opaque {
+- (UIScreen*)screen {
+  if (@available(iOS 13.0, *)) {
+    return self.window.windowScene.screen;
+  }
+  return UIScreen.mainScreen;
+}
+
+- (MTLPixelFormat)pixelFormat {
+  if ([self.layer isKindOfClass:[CAMetalLayer class]]) {
+// It is a known Apple bug that CAMetalLayer incorrectly reports its supported
+// SDKs. It is, in fact, available since iOS 8.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+    CAMetalLayer* layer = (CAMetalLayer*)self.layer;
+    return layer.pixelFormat;
+  }
+  return MTLPixelFormatBGRA8Unorm;
+}
+- (BOOL)isWideGamutSupported {
+  if (!self.delegate.isUsingImpeller) {
+    return NO;
+  }
+
+  FML_DCHECK(self.screen);
+
+  // This predicates the decision on the capabilities of the iOS device's
+  // display.  This means external displays will not support wide gamut if the
+  // device's display doesn't support it.  It practice that should be never.
+  return self.screen.traitCollection.displayGamut != UIDisplayGamutSRGB;
+}
+
+- (instancetype)initWithDelegate:(id<FlutterViewEngineDelegate>)delegate
+                          opaque:(BOOL)opaque
+                 enableWideGamut:(BOOL)isWideGamutEnabled {
   if (delegate == nil) {
     NSLog(@"FlutterView delegate was nil.");
-    [self release];
     return nil;
   }
 
@@ -47,19 +75,44 @@
 
   if (self) {
     _delegate = delegate;
+    _isWideGamutEnabled = isWideGamutEnabled;
     self.layer.opaque = opaque;
   }
 
   return self;
 }
 
+static void PrintWideGamutWarningOnce() {
+  static BOOL did_print = NO;
+  if (did_print) {
+    return;
+  }
+  FML_DLOG(WARNING) << "Rendering wide gamut colors is turned on but isn't "
+                       "supported, downgrading the color gamut to sRGB.";
+  did_print = YES;
+}
+
 - (void)layoutSubviews {
-  if ([self.layer isKindOfClass:NSClassFromString(@"CAEAGLLayer")] ||
-      [self.layer isKindOfClass:NSClassFromString(@"CAMetalLayer")]) {
-    CGFloat screenScale = [UIScreen mainScreen].scale;
-    self.layer.allowsGroupOpacity = YES;
-    self.layer.contentsScale = screenScale;
-    self.layer.rasterizationScale = screenScale;
+  if ([self.layer isKindOfClass:[CAMetalLayer class]]) {
+// It is a known Apple bug that CAMetalLayer incorrectly reports its supported
+// SDKs. It is, in fact, available since iOS 8.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+    CAMetalLayer* layer = (CAMetalLayer*)self.layer;
+#pragma clang diagnostic pop
+    CGFloat screenScale = self.screen.scale;
+    layer.allowsGroupOpacity = YES;
+    layer.contentsScale = screenScale;
+    layer.rasterizationScale = screenScale;
+    layer.framebufferOnly = flutter::Settings::kSurfaceDataAccessible ? NO : YES;
+    BOOL isWideGamutSupported = self.isWideGamutSupported;
+    if (_isWideGamutEnabled && isWideGamutSupported) {
+      fml::CFRef<CGColorSpaceRef> srgb(CGColorSpaceCreateWithName(kCGColorSpaceExtendedSRGB));
+      layer.colorspace = srgb;
+      layer.pixelFormat = MTLPixelFormatBGRA10_XR;
+    } else if (_isWideGamutEnabled && !isWideGamutSupported) {
+      PrintWideGamutWarningOnce();
+    }
   }
 
   [super layoutSubviews];
@@ -102,26 +155,59 @@ static BOOL _forceSoftwareRendering;
 
   fml::CFRef<CGColorSpaceRef> colorspace(CGColorSpaceCreateDeviceRGB());
 
+  // Defaults for RGBA8888.
+  size_t bits_per_component = 8u;
+  size_t bits_per_pixel = 32u;
+  size_t bytes_per_row_multiplier = 4u;
+  CGBitmapInfo bitmap_info =
+      static_cast<CGBitmapInfo>(static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) |
+                                static_cast<uint32_t>(kCGBitmapByteOrder32Big));
+
+  switch (screenshot.pixel_format) {
+    case flutter::Rasterizer::ScreenshotFormat::kUnknown:
+    case flutter::Rasterizer::ScreenshotFormat::kR8G8B8A8UNormInt:
+      // Assume unknown is Skia and is RGBA8888. Keep defaults.
+      break;
+    case flutter::Rasterizer::ScreenshotFormat::kB8G8R8A8UNormInt:
+      // Treat this as little endian with the alpha first so that it's read backwards.
+      bitmap_info =
+          static_cast<CGBitmapInfo>(static_cast<uint32_t>(kCGImageAlphaPremultipliedFirst) |
+                                    static_cast<uint32_t>(kCGBitmapByteOrder32Little));
+      break;
+    case flutter::Rasterizer::ScreenshotFormat::kR16G16B16A16Float:
+      bits_per_component = 16u;
+      bits_per_pixel = 64u;
+      bytes_per_row_multiplier = 8u;
+      bitmap_info =
+          static_cast<CGBitmapInfo>(static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) |
+                                    static_cast<uint32_t>(kCGBitmapFloatComponents) |
+                                    static_cast<uint32_t>(kCGBitmapByteOrder16Little));
+      break;
+  }
+
   fml::CFRef<CGImageRef> image(CGImageCreate(
-      screenshot.frame_size.width(),      // size_t width
-      screenshot.frame_size.height(),     // size_t height
-      8,                                  // size_t bitsPerComponent
-      32,                                 // size_t bitsPerPixel,
-      4 * screenshot.frame_size.width(),  // size_t bytesPerRow
-      colorspace,                         // CGColorSpaceRef space
-      static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast |
-                                kCGBitmapByteOrder32Big),  // CGBitmapInfo bitmapInfo
-      image_data_provider,                                 // CGDataProviderRef provider
-      nullptr,                                             // const CGFloat* decode
-      false,                                               // bool shouldInterpolate
-      kCGRenderingIntentDefault                            // CGColorRenderingIntent intent
+      screenshot.frame_size.width(),                             // size_t width
+      screenshot.frame_size.height(),                            // size_t height
+      bits_per_component,                                        // size_t bitsPerComponent
+      bits_per_pixel,                                            // size_t bitsPerPixel,
+      bytes_per_row_multiplier * screenshot.frame_size.width(),  // size_t bytesPerRow
+      colorspace,                                                // CGColorSpaceRef space
+      bitmap_info,                                               // CGBitmapInfo bitmapInfo
+      image_data_provider,                                       // CGDataProviderRef provider
+      nullptr,                                                   // const CGFloat* decode
+      false,                                                     // bool shouldInterpolate
+      kCGRenderingIntentDefault                                  // CGColorRenderingIntent intent
       ));
 
   const CGRect frame_rect =
       CGRectMake(0.0, 0.0, screenshot.frame_size.width(), screenshot.frame_size.height());
-
   CGContextSaveGState(context);
-  CGContextTranslateCTM(context, 0.0, CGBitmapContextGetHeight(context));
+  // If the CGContext is not a bitmap based context, this returns zero.
+  CGFloat height = CGBitmapContextGetHeight(context);
+  if (height == 0) {
+    height = CGFloat(screenshot.frame_size.height());
+  }
+  CGContextTranslateCTM(context, 0.0, height);
   CGContextScaleCTM(context, 1.0, -1.0);
   CGContextDrawImage(context, frame_rect, image);
   CGContextRestoreGState(context);
@@ -136,8 +222,34 @@ static BOOL _forceSoftwareRendering;
   // TODO(chunhtai): Remove this workaround once iOS provides an
   // API to query whether voice control is enabled.
   // https://github.com/flutter/flutter/issues/76808.
-  [_delegate flutterViewAccessibilityDidCall];
+  [self.delegate flutterViewAccessibilityDidCall];
   return NO;
+}
+
+// Enables keyboard-based navigation when the user turns on
+// full keyboard access (FKA), using existing accessibility information.
+//
+// iOS does not provide any API for monitoring or querying whether FKA is on,
+// but it does call isAccessibilityElement if FKA is on,
+// so the isAccessibilityElement implementation above will be called
+// when the view appears and the accessibility information will most likely
+// be available by the time the user starts to interact with the app using FKA.
+//
+// See SemanticsObject+UIFocusSystem.mm for more details.
+- (NSArray<id<UIFocusItem>>*)focusItemsInRect:(CGRect)rect {
+  NSObject* rootAccessibilityElement =
+      [self.accessibilityElements count] > 0 ? self.accessibilityElements[0] : nil;
+  return [rootAccessibilityElement isKindOfClass:[SemanticsObjectContainer class]]
+             ? @[ [rootAccessibilityElement accessibilityElementAtIndex:0] ]
+             : nil;
+}
+
+- (NSArray<id<UIFocusEnvironment>>*)preferredFocusEnvironments {
+  // Occasionally we add subviews to FlutterView (text fields for example).
+  // These views shouldn't be directly visible to the iOS focus engine, instead
+  // the focus engine should only interact with the designated focus items
+  // (SemanticsObjects).
+  return nil;
 }
 
 @end

@@ -10,20 +10,20 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.hardware.display.DisplayManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.view.WindowManager;
+import android.util.DisplayMetrics;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.tracing.Trace;
 import io.flutter.BuildConfig;
 import io.flutter.FlutterInjector;
 import io.flutter.Log;
 import io.flutter.embedding.engine.FlutterJNI;
+import io.flutter.util.HandlerCompat;
 import io.flutter.util.PathUtils;
+import io.flutter.util.TraceSection;
 import io.flutter.view.VsyncWaiter;
 import java.io.File;
 import java.util.*;
@@ -37,8 +37,33 @@ public class FlutterLoader {
 
   private static final String OLD_GEN_HEAP_SIZE_META_DATA_KEY =
       "io.flutter.embedding.android.OldGenHeapSize";
-  private static final String ENABLE_SKPARAGRAPH_META_DATA_KEY =
-      "io.flutter.embedding.android.EnableSkParagraph";
+  private static final String ENABLE_IMPELLER_META_DATA_KEY =
+      "io.flutter.embedding.android.EnableImpeller";
+  private static final String ENABLE_VULKAN_VALIDATION_META_DATA_KEY =
+      "io.flutter.embedding.android.EnableVulkanValidation";
+  private static final String IMPELLER_BACKEND_META_DATA_KEY =
+      "io.flutter.embedding.android.ImpellerBackend";
+  private static final String IMPELLER_OPENGL_GPU_TRACING_DATA_KEY =
+      "io.flutter.embedding.android.EnableOpenGLGPUTracing";
+  private static final String IMPELLER_VULKAN_GPU_TRACING_DATA_KEY =
+      "io.flutter.embedding.android.EnableVulkanGPUTracing";
+  private static final String DISABLE_MERGED_PLATFORM_UI_THREAD_KEY =
+      "io.flutter.embedding.android.DisableMergedPlatformUIThread";
+  private static final String DISABLE_SURFACE_CONTROL =
+      "io.flutter.embedding.android.DisableSurfaceControl";
+
+  /**
+   * Set whether leave or clean up the VM after the last shell shuts down. It can be set from app's
+   * meta-data in <application /> in AndroidManifest.xml. Set it to true in to leave the Dart VM,
+   * set it to false to destroy VM.
+   *
+   * <p>If your want to let your app destroy the last shell and re-create shells more quickly, set
+   * it to true, otherwise if you want to clean up the memory of the leak VM, set it to false.
+   *
+   * <p>TODO(eggfly): Should it be set to false by default?
+   * https://github.com/flutter/flutter/issues/96843
+   */
+  private static final String LEAK_VM_META_DATA_KEY = "io.flutter.embedding.android.LeakVM";
 
   // Must match values in flutter::switches
   static final String AOT_SHARED_LIBRARY_NAME = "aot-shared-library-name";
@@ -136,9 +161,7 @@ public class FlutterLoader {
       throw new IllegalStateException("startInitialization must be called on the main thread");
     }
 
-    Trace.beginSection("FlutterLoader#startInitialization");
-
-    try {
+    try (TraceSection e = TraceSection.scoped("FlutterLoader#startInitialization")) {
       // Ensure that the context is actually the application context.
       final Context appContext = applicationContext.getApplicationContext();
 
@@ -147,18 +170,9 @@ public class FlutterLoader {
       initStartTimestampMillis = SystemClock.uptimeMillis();
       flutterApplicationInfo = ApplicationInfoLoader.load(appContext);
 
-      VsyncWaiter waiter;
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 /* 17 */) {
-        final DisplayManager dm =
-            (DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
-        waiter = VsyncWaiter.getInstance(dm, flutterJNI);
-      } else {
-        float fps =
-            ((WindowManager) appContext.getSystemService(Context.WINDOW_SERVICE))
-                .getDefaultDisplay()
-                .getRefreshRate();
-        waiter = VsyncWaiter.getInstance(fps, flutterJNI);
-      }
+      final DisplayManager dm =
+          (DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
+      VsyncWaiter waiter = VsyncWaiter.getInstance(dm, flutterJNI);
       waiter.init();
 
       // Use a background thread for initialization tasks that require disk access.
@@ -166,12 +180,47 @@ public class FlutterLoader {
           new Callable<InitResult>() {
             @Override
             public InitResult call() {
-              Trace.beginSection("FlutterLoader initTask");
-
-              try {
+              try (TraceSection e = TraceSection.scoped("FlutterLoader initTask")) {
                 ResourceExtractor resourceExtractor = initResources(appContext);
 
-                flutterJNI.loadLibrary();
+                try {
+                  flutterJNI.loadLibrary(appContext);
+                } catch (UnsatisfiedLinkError unsatisfiedLinkError) {
+                  String couldntFindVersion = "couldn't find \"libflutter.so\"";
+                  String notFoundVersion = "dlopen failed: library \"libflutter.so\" not found";
+
+                  if (unsatisfiedLinkError.toString().contains(couldntFindVersion)
+                      || unsatisfiedLinkError.toString().contains(notFoundVersion)) {
+                    // To gather more information for
+                    // https://github.com/flutter/flutter/issues/144291,
+                    // log the contents of the native libraries directory as well as the
+                    // cpu architecture.
+
+                    String cpuArch = System.getProperty("os.arch");
+                    File nativeLibsDir = new File(flutterApplicationInfo.nativeLibraryDir);
+                    String[] nativeLibsContents = nativeLibsDir.list();
+
+                    throw new UnsupportedOperationException(
+                        "Could not load libflutter.so this is possibly because the application"
+                            + " is running on an architecture that Flutter Android does not support (e.g. x86)"
+                            + " see https://docs.flutter.dev/deployment/android#what-are-the-supported-target-architectures"
+                            + " for more detail.\n"
+                            + "App is using cpu architecture: "
+                            + cpuArch
+                            + ", and the native libraries directory (with path "
+                            + nativeLibsDir.getAbsolutePath()
+                            + ") "
+                            + (nativeLibsDir.exists()
+                                ? "contains the following files: "
+                                    + Arrays.toString(nativeLibsContents)
+                                : "does not exist."),
+                        unsatisfiedLinkError);
+                  }
+
+                  throw unsatisfiedLinkError;
+                }
+
+                flutterJNI.updateRefreshRate();
 
                 // Prefetch the default font manager as soon as possible on a background thread.
                 // It helps to reduce time cost of engine setup that blocks the platform thread.
@@ -185,14 +234,10 @@ public class FlutterLoader {
                     PathUtils.getFilesDir(appContext),
                     PathUtils.getCacheDirectory(appContext),
                     PathUtils.getDataDirectory(appContext));
-              } finally {
-                Trace.endSection();
               }
             }
           };
       initResultFuture = executorService.submit(initTask);
-    } finally {
-      Trace.endSection();
     }
   }
 
@@ -217,9 +262,8 @@ public class FlutterLoader {
       throw new IllegalStateException(
           "ensureInitializationComplete must be called after startInitialization");
     }
-    Trace.beginSection("FlutterLoader#ensureInitializationComplete");
 
-    try {
+    try (TraceSection e = TraceSection.scoped("FlutterLoader#ensureInitializationComplete")) {
       InitResult result = initResultFuture.get();
 
       List<String> shellArgs = new ArrayList<>();
@@ -290,14 +334,53 @@ public class FlutterLoader {
         activityManager.getMemoryInfo(memInfo);
         oldGenHeapSizeMegaBytes = (int) (memInfo.totalMem / 1e6 / 2);
       }
-
       shellArgs.add("--old-gen-heap-size=" + oldGenHeapSizeMegaBytes);
+
+      DisplayMetrics displayMetrics = applicationContext.getResources().getDisplayMetrics();
+      int screenWidth = displayMetrics.widthPixels;
+      int screenHeight = displayMetrics.heightPixels;
+      // This is the formula Android uses.
+      // https://android.googlesource.com/platform/frameworks/base/+/39ae5bac216757bc201490f4c7b8c0f63006c6cd/libs/hwui/renderthread/CacheManager.cpp#45
+      int resourceCacheMaxBytesThreshold = screenWidth * screenHeight * 12 * 4;
+      shellArgs.add("--resource-cache-max-bytes-threshold=" + resourceCacheMaxBytesThreshold);
 
       shellArgs.add("--prefetched-default-font-manager");
 
-      if (metaData != null && metaData.getBoolean(ENABLE_SKPARAGRAPH_META_DATA_KEY)) {
-        shellArgs.add("--enable-skparagraph");
+      if (metaData != null) {
+        if (metaData.containsKey(ENABLE_IMPELLER_META_DATA_KEY)) {
+          if (metaData.getBoolean(ENABLE_IMPELLER_META_DATA_KEY)) {
+            shellArgs.add("--enable-impeller=true");
+          } else {
+            shellArgs.add("--enable-impeller=false");
+          }
+        }
+        if (metaData.getBoolean(ENABLE_VULKAN_VALIDATION_META_DATA_KEY, false)) {
+          shellArgs.add("--enable-vulkan-validation");
+        }
+        if (metaData.getBoolean(IMPELLER_OPENGL_GPU_TRACING_DATA_KEY, false)) {
+          shellArgs.add("--enable-opengl-gpu-tracing");
+        }
+        if (metaData.getBoolean(IMPELLER_VULKAN_GPU_TRACING_DATA_KEY, false)) {
+          shellArgs.add("--enable-vulkan-gpu-tracing");
+        }
+        if (metaData.containsKey(DISABLE_MERGED_PLATFORM_UI_THREAD_KEY)) {
+          if (metaData.getBoolean(DISABLE_MERGED_PLATFORM_UI_THREAD_KEY)) {
+            shellArgs.add("--no-enable-merged-platform-ui-thread");
+          }
+        }
+
+        if (metaData.getBoolean(DISABLE_SURFACE_CONTROL, false)) {
+          shellArgs.add("--disable-surface-control");
+        }
+
+        String backend = metaData.getString(IMPELLER_BACKEND_META_DATA_KEY);
+        if (backend != null) {
+          shellArgs.add("--impeller-backend=" + backend);
+        }
       }
+
+      final String leakVM = isLeakVM(metaData) ? "true" : "false";
+      shellArgs.add("--leak-vm=" + leakVM);
 
       long initTimeMillis = SystemClock.uptimeMillis() - initStartTimestampMillis;
 
@@ -313,9 +396,15 @@ public class FlutterLoader {
     } catch (Exception e) {
       Log.e(TAG, "Flutter initialization failed.", e);
       throw new RuntimeException(e);
-    } finally {
-      Trace.endSection();
     }
+  }
+
+  private static boolean isLeakVM(@Nullable Bundle metaData) {
+    final boolean leakVMDefaultValue = true;
+    if (metaData == null) {
+      return leakVMDefaultValue;
+    }
+    return metaData.getBoolean(LEAK_VM_META_DATA_KEY, leakVMDefaultValue);
   }
 
   /**
@@ -348,7 +437,7 @@ public class FlutterLoader {
             Log.e(TAG, "Flutter initialization failed.", e);
             throw new RuntimeException(e);
           }
-          new Handler(Looper.getMainLooper())
+          HandlerCompat.createAsyncHandler(Looper.getMainLooper())
               .post(
                   () -> {
                     ensureInitializationComplete(applicationContext.getApplicationContext(), args);

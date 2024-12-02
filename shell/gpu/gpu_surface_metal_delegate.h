@@ -10,7 +10,7 @@
 #include "flutter/fml/macros.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "third_party/skia/include/gpu/mtl/GrMtlTypes.h"
+#include "third_party/skia/include/gpu/ganesh/mtl/GrMtlTypes.h"
 
 namespace flutter {
 
@@ -26,9 +26,13 @@ typedef void* GPUCAMetalLayerHandle;
 // expected to be id<MTLTexture>
 typedef const void* GPUMTLTextureHandle;
 
+typedef void (*GPUMTLDestructionCallback)(void* /* destruction_context */);
+
 struct GPUMTLTextureInfo {
   int64_t texture_id;
   GPUMTLTextureHandle texture;
+  GPUMTLDestructionCallback destruction_callback;
+  void* destruction_context;
 };
 
 enum class MTLRenderTargetType { kMTLTexture, kCAMetalLayer };
@@ -73,16 +77,18 @@ class GPUSurfaceMetalDelegate {
   ///
   virtual bool PresentDrawable(GrMTLHandle drawable) const = 0;
 
+  virtual bool PreparePresent(GrMTLHandle drawable) const { return true; }
+
   //------------------------------------------------------------------------------
   /// @brief Returns the handle to the MTLTexture to render to. This is only
-  /// called when the specefied render target type is `kMTLTexture`.
+  /// called when the specified render target type is `kMTLTexture`.
   ///
   virtual GPUMTLTextureInfo GetMTLTexture(const SkISize& frame_info) const = 0;
 
   //------------------------------------------------------------------------------
   /// @brief Presents the texture with `texture_id` to the "screen".
   /// `texture_id` corresponds to a texture that has been obtained by an earlier
-  /// call to `GetMTLTexture`. This is only called when the specefied render
+  /// call to `GetMTLTexture`. This is only called when the specified render
   /// target type is `kMTLTexture`.
   ///
   /// @see |GPUSurfaceMetalDelegate::GetMTLTexture|

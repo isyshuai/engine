@@ -32,6 +32,7 @@ _gen_kernel_path =
     get_label_info(_gen_kernel_label, "root_out_dir") + "/dart-tools/gen_kernel"
 
 flutter_platform_name = "flutter_runner"
+dart_platform_name = "dart_runner"
 
 # Converts the kernel manifest file from fini format to JSON format and
 # registers the metadata for the fuchsia_package to pick up.
@@ -133,7 +134,7 @@ template("_convert_kernel_manifest") {
 #  link_platform (optional)
 #    Whether the kernel compiler should link the current platform.dill into
 #    the build. If false, the --no-link-platform flag will be passed to the
-#    compiler. Defaults to false
+#    compiler. Defaults to false.
 template("dart_kernel") {
   assert(defined(invoker.platform_name), "dart_kernel() requires platform_name")
   assert(defined(invoker.packages_path),
@@ -211,6 +212,9 @@ template("dart_kernel") {
         "//flutter/shell/platform/fuchsia/flutter/kernel:kernel_platform_files",
       ]
       _platform_path = "$root_out_dir/flutter_runner_patched_sdk"
+    } else if (invoker.platform_name == dart_platform_name) {
+      _kernel_deps += [ "//flutter/shell/platform/fuchsia/dart_runner/kernel:kernel_platform_files" ]
+      _platform_path = "$root_out_dir/dart_runner_patched_sdk"
     } else {
       assert(false,
              "platform_name must be either dart_runner or flutter_runner")
@@ -254,7 +258,6 @@ template("dart_kernel") {
     }
     args += [
       "--verbosity=warning",
-      "--no-sound-null-safety",
       "--target",
       invoker.platform_name,
       "--platform",
@@ -272,6 +275,7 @@ template("dart_kernel") {
       rebase_path(depfile, root_build_dir),
       "--output",
       rebase_path(_kernel_path, root_build_dir),
+      "--sound-null-safety",
     ]
 
     # TODO(richkadel): It should be possible to remove all of the build rules

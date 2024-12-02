@@ -6,12 +6,13 @@ import 'dart:io' as io;
 
 import 'package:args/command_runner.dart';
 
+import 'analyze.dart';
 import 'build.dart';
 import 'clean.dart';
-import 'create_simulator.dart';
 import 'exceptions.dart';
+import 'generate_builder_json.dart';
 import 'licenses.dart';
-import 'run.dart';
+import 'roll_fallback_fonts.dart';
 import 'test_runner.dart';
 import 'utils.dart';
 
@@ -19,11 +20,12 @@ CommandRunner<bool> runner = CommandRunner<bool>(
   'felt',
   'Command-line utility for building and testing Flutter web engine.',
 )
+  ..addCommand(AnalyzeCommand())
   ..addCommand(BuildCommand())
   ..addCommand(CleanCommand())
-  ..addCommand(CreateSimulatorCommand())
+  ..addCommand(RollFallbackFontsCommand())
+  ..addCommand(GenerateBuilderJsonCommand())
   ..addCommand(LicensesCommand())
-  ..addCommand(RunCommand())
   ..addCommand(TestCommand());
 
 Future<void> main(List<String> rawArgs) async {
@@ -71,7 +73,7 @@ Future<void> main(List<String> rawArgs) async {
   io.exit(io.exitCode);
 }
 
-Future<void> _listenToShutdownSignals() async {
+void _listenToShutdownSignals() {
   io.ProcessSignal.sigint.watch().listen((_) async {
     print('Received SIGINT. Shutting down.');
     await cleanup();

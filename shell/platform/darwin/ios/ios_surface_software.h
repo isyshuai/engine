@@ -7,10 +7,11 @@
 
 #include "flutter/flow/embedded_views.h"
 #include "flutter/fml/macros.h"
-#include "flutter/fml/platform/darwin/scoped_nsobject.h"
 #include "flutter/shell/gpu/gpu_surface_software.h"
 #import "flutter/shell/platform/darwin/ios/ios_context.h"
 #import "flutter/shell/platform/darwin/ios/ios_surface.h"
+
+#include "third_party/skia/include/core/SkSurface.h"
 
 @class CALayer;
 
@@ -18,7 +19,7 @@ namespace flutter {
 
 class IOSSurfaceSoftware final : public IOSSurface, public GPUSurfaceSoftwareDelegate {
  public:
-  IOSSurfaceSoftware(fml::scoped_nsobject<CALayer> layer, std::shared_ptr<IOSContext> context);
+  IOSSurfaceSoftware(CALayer* layer, std::shared_ptr<IOSContext> context);
 
   ~IOSSurfaceSoftware() override;
 
@@ -38,7 +39,7 @@ class IOSSurfaceSoftware final : public IOSSurface, public GPUSurfaceSoftwareDel
   bool PresentBackingStore(sk_sp<SkSurface> backing_store) override;
 
  private:
-  fml::scoped_nsobject<CALayer> layer_;
+  CALayer* layer_;
   sk_sp<SkSurface> sk_surface_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(IOSSurfaceSoftware);

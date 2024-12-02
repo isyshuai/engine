@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
 final Float32List identityTransform = Matrix4.identity().storage;
 final Float32List xTranslation = (Matrix4.identity()..translate(10)).storage;
 final Float32List yTranslation = (Matrix4.identity()..translate(0, 10)).storage;
 final Float32List zTranslation = (Matrix4.identity()..translate(0, 0, 10)).storage;
-final Float32List scaleAndTranslate2d = (Matrix4.identity()..scale(2, 3, 1)..translate(4, 5, 0)).storage;
+final Float32List scaleAndTranslate2d = (Matrix4.identity()..scale(2, 3, 1)..translate(4, 5)).storage;
 final Float32List rotation2d = (Matrix4.identity()..rotateZ(0.2)).storage;
 
 void main() {
@@ -41,8 +42,9 @@ void testMain() {
     expect(isIdentityFloat32ListTransform(rotation2d), isFalse);
   });
 
-  test('canonicalizes font families correctly on iOS', () {
-    debugOperatingSystemOverride = OperatingSystem.iOs;
+  test('canonicalizes font families correctly on iOS (not 15)', () {
+    ui_web.browser.debugOperatingSystemOverride = ui_web.OperatingSystem.iOs;
+    debugIsIOS15 = false;
 
     expect(
       canonicalizeFontFamily('sans-serif'),
@@ -57,11 +59,12 @@ void testMain() {
       '-apple-system, BlinkMacSystemFont',
     );
 
-    debugOperatingSystemOverride = null;
+    ui_web.browser.debugOperatingSystemOverride = null;
+    debugIsIOS15 = null;
   });
 
   test('does not use -apple-system on iOS 15', () {
-    debugOperatingSystemOverride = OperatingSystem.iOs;
+    ui_web.browser.debugOperatingSystemOverride = ui_web.OperatingSystem.iOs;
     debugIsIOS15 = true;
 
     expect(
@@ -77,7 +80,7 @@ void testMain() {
       'BlinkMacSystemFont',
     );
 
-    debugOperatingSystemOverride = null;
+    ui_web.browser.debugOperatingSystemOverride = null;
     debugIsIOS15 = null;
   });
 
@@ -104,16 +107,65 @@ void testMain() {
   });
 
   test('can set style properties on elements', () {
-    final html.Element element = html.document.createElement('div');
+    final DomElement element = domDocument.createElement('div');
     setElementStyle(element, 'color', 'red');
     expect(element.style.color, 'red');
   });
 
   test('can remove style properties from elements', () {
-    final html.Element element = html.document.createElement('div');
+    final DomElement element = domDocument.createElement('div');
     setElementStyle(element, 'color', 'blue');
     expect(element.style.color, 'blue');
     setElementStyle(element, 'color', null);
     expect(element.style.color, '');
+  });
+
+  test('futurize turns a Callbacker into a Future', () async {
+    final Future<String> stringFuture = futurize((Callback<String> callback) {
+      scheduleMicrotask(() {
+        callback('hello');
+      });
+      return null;
+    });
+    expect(await stringFuture, 'hello');
+  });
+
+  test('futurize converts error string to exception', () async {
+    try {
+      await futurize((Callback<String> callback) {
+        return 'this is an error';
+      });
+      fail('Expected it to throw');
+    } on Exception catch(exception) {
+      expect('$exception', contains('this is an error'));
+    }
+  });
+
+  test('futurize converts async null into an async operation failure', () async {
+    final Future<String?> stringFuture = futurize((Callback<String?> callback) {
+      scheduleMicrotask(() {
+        callback(null);
+      });
+      return null;
+    });
+
+    try {
+      await stringFuture;
+      fail('Expected it to throw');
+    } on Exception catch(exception) {
+      expect('$exception', contains('operation failed'));
+    }
+  });
+
+  test('futurize converts sync null into a sync operation failure', () async {
+    try {
+      await futurize((Callback<String?> callback) {
+        callback(null);
+        return null;
+      });
+      fail('Expected it to throw');
+    } on Exception catch(exception) {
+      expect('$exception', contains('operation failed'));
+    }
   });
 }

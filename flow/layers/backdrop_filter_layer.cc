@@ -6,16 +6,18 @@
 
 namespace flutter {
 
-BackdropFilterLayer::BackdropFilterLayer(sk_sp<SkImageFilter> filter,
-                                         SkBlendMode blend_mode)
-    : filter_(std::move(filter)), blend_mode_(blend_mode) {}
+BackdropFilterLayer::BackdropFilterLayer(
+    const std::shared_ptr<DlImageFilter>& filter,
+    DlBlendMode blend_mode,
+    std::optional<int64_t> backdrop_id)
+    : filter_(filter), blend_mode_(blend_mode), backdrop_id_(backdrop_id) {}
 
 void BackdropFilterLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const BackdropFilterLayer*>(old_layer);
   if (!context->IsSubtreeDirty()) {
     FML_DCHECK(prev);
-    if (filter_ != prev->filter_) {
+    if (NotEquals(filter_, prev->filter_)) {
       context->MarkSubtreeDirty(context->GetOldLayerPaintRegion(old_layer));
     }
   }
@@ -25,12 +27,13 @@ void BackdropFilterLayer::Diff(DiffContext* context, const Layer* old_layer) {
   context->AddLayerBounds(paint_bounds);
 
   if (filter_) {
-    context->GetTransform().mapRect(&paint_bounds);
-    auto input_filter_bounds = paint_bounds.roundOut();
-    auto filter_bounds =  // in screen coordinates
-        filter_->filterBounds(input_filter_bounds, context->GetTransform(),
-                              SkImageFilter::kReverse_MapDirection);
-    context->AddReadbackRegion(filter_bounds);
+    paint_bounds = context->MapRect(paint_bounds);
+    auto filter_target_bounds = paint_bounds.roundOut();
+    DlIRect filter_input_bounds;  // in screen coordinates
+    filter_->get_input_device_bounds(ToDlIRect(filter_target_bounds),
+                                     context->GetMatrix(), filter_input_bounds);
+    context->AddReadbackRegion(filter_target_bounds,
+                               ToSkIRect(filter_input_bounds));
   }
 
   DiffChildren(context, prev);
@@ -38,28 +41,27 @@ void BackdropFilterLayer::Diff(DiffContext* context, const Layer* old_layer) {
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
 
-void BackdropFilterLayer::Preroll(PrerollContext* context,
-                                  const SkMatrix& matrix) {
+void BackdropFilterLayer::Preroll(PrerollContext* context) {
   Layer::AutoPrerollSaveLayerState save =
       Layer::AutoPrerollSaveLayerState::Create(context, true, bool(filter_));
+  if (filter_ && context->view_embedder != nullptr) {
+    context->view_embedder->PushFilterToVisitedPlatformViews(
+        filter_, context->state_stack.device_cull_rect());
+  }
   SkRect child_paint_bounds = SkRect::MakeEmpty();
-  PrerollChildren(context, matrix, &child_paint_bounds);
-  child_paint_bounds.join(context->cull_rect);
+  PrerollChildren(context, &child_paint_bounds);
+  child_paint_bounds.join(context->state_stack.local_cull_rect());
   set_paint_bounds(child_paint_bounds);
+  context->renderable_state_flags = kSaveLayerRenderFlags;
 }
 
 void BackdropFilterLayer::Paint(PaintContext& context) const {
-  TRACE_EVENT0("flutter", "BackdropFilterLayer::Paint");
   FML_DCHECK(needs_painting(context));
 
-  SkPaint paint;
-  paint.setBlendMode(blend_mode_);
-  Layer::AutoSaveLayer save = Layer::AutoSaveLayer::Create(
-      context,
-      SkCanvas::SaveLayerRec{&paint_bounds(), &paint, filter_.get(), 0},
-      // BackdropFilter should only happen on the leaf nodes canvas.
-      // See https:://flutter.dev/go/backdrop-filter-with-overlay-canvas
-      AutoSaveLayer::SaveMode::kLeafNodesCanvas);
+  auto mutator = context.state_stack.save();
+  mutator.applyBackdropFilter(paint_bounds(), filter_, blend_mode_,
+                              backdrop_id_);
+
   PaintChildren(context);
 }
 

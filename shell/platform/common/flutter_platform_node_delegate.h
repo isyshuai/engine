@@ -125,12 +125,25 @@ class FlutterPlatformNodeDelegate : public ui::AXPlatformNodeDelegateBase {
       const ui::AXClippingBehavior clipping_behavior,
       ui::AXOffscreenResult* offscreen_result) const override;
 
+  // |ui::AXPlatformNodeDelegateBase|
+  gfx::NativeViewAccessible GetLowestPlatformAncestor() const override;
+
+  // |ui::AXPlatformNodeDelegateBase|
+  ui::AXNodePosition::AXPositionInstance CreateTextPositionAt(
+      int offset) const override;
+
   //------------------------------------------------------------------------------
   /// @brief      Called only once, immediately after construction. The
   ///             constructor doesn't take any arguments because in the Windows
   ///             subclass we use a special function to construct a COM object.
   ///             Subclasses must call super.
   virtual void Init(std::weak_ptr<OwnerBridge> bridge, ui::AXNode* node);
+
+  //------------------------------------------------------------------------------
+  // @brief       Called when node was updated. Subclasses can override this
+  //              to update platform nodes.
+  virtual void NodeDataChanged(const ui::AXNodeData& old_node_data,
+                               const ui::AXNodeData& new_node_data) {}
 
   //------------------------------------------------------------------------------
   /// @brief      Gets the underlying ax node for this platform node delegate.
@@ -143,6 +156,20 @@ class FlutterPlatformNodeDelegate : public ui::AXPlatformNodeDelegateBase {
   ///             platform node delegate. This pointer is only safe in the
   ///             platform thread.
   std::weak_ptr<OwnerBridge> GetOwnerBridge() const;
+
+  // Get the platform node represented by this delegate.
+  virtual ui::AXPlatformNode* GetPlatformNode() const;
+
+  // |ui::AXPlatformNodeDelegateBase|
+  virtual ui::AXPlatformNode* GetFromNodeID(int32_t id) override;
+
+  // |ui::AXPlatformNodeDelegateBase|
+  virtual ui::AXPlatformNode* GetFromTreeIDAndNodeID(
+      const ui::AXTreeID& tree_id,
+      int32_t node_id) override;
+
+  // |ui::AXPlatformNodeDelegateBase|
+  virtual const ui::AXTree::Selection GetUnignoredSelection() const override;
 
  private:
   ui::AXNode* ax_node_;

@@ -10,12 +10,14 @@
 #include <string>
 #include <vector>
 
+#include "flutter/shell/platform/windows/windows_proc_table.h"
+
 namespace flutter {
 
-namespace {
-static constexpr wchar_t kPlatformBrightnessLight[] = L"light";
-static constexpr wchar_t kPlatformBrightnessDark[] = L"dark";
-}  // namespace
+// Registry key for user-preferred languages.
+constexpr const wchar_t kGetPreferredLanguageRegKey[] =
+    L"Control panel\\International\\User Profile";
+constexpr const wchar_t kGetPreferredLanguageRegValue[] = L"Languages";
 
 // Components of a system language/locale.
 struct LanguageInfo {
@@ -26,12 +28,18 @@ struct LanguageInfo {
 
 // Returns the list of user-preferred languages, in preference order,
 // parsed into LanguageInfo structures.
-std::vector<LanguageInfo> GetPreferredLanguageInfo();
+std::vector<LanguageInfo> GetPreferredLanguageInfo(
+    const WindowsProcTable& windows_proc_table);
+
+// Retrieve the preferred languages from the MUI API.
+std::wstring GetPreferredLanguagesFromMUI(
+    const WindowsProcTable& windows_proc_table);
 
 // Returns the list of user-preferred languages, in preference order.
 // The language names are as described at:
 // https://docs.microsoft.com/en-us/windows/win32/intl/language-names
-std::vector<std::wstring> GetPreferredLanguages();
+std::vector<std::wstring> GetPreferredLanguages(
+    const WindowsProcTable& windows_proc_table);
 
 // Parses a Windows language name into its components.
 LanguageInfo ParseLanguageName(std::wstring language_name);
@@ -41,9 +49,6 @@ std::wstring GetUserTimeFormat();
 
 // Returns true if the time_format is set to use 24 hour time.
 bool Prefer24HourTime(std::wstring time_format);
-
-// Returns the user-preferred brightness.
-std::wstring GetPreferredBrightness();
 
 }  // namespace flutter
 

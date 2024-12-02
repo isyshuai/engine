@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
-
 import 'dart:io' as io;
 
 import 'package:args/command_runner.dart';
@@ -22,10 +20,18 @@ class PrePushCommand extends Command<bool> {
   Future<bool> run() async {
     final Stopwatch sw = Stopwatch()..start();
     final bool verbose = globalResults!['verbose']! as bool;
+    final bool enableClangTidy = globalResults!['enable-clang-tidy']! as bool;
     final String flutterRoot = globalResults!['flutter']! as String;
+
+    if (!enableClangTidy) {
+      print('The clang-tidy check is disabled. To enable set the environment '
+            'variable PRE_PUSH_CLANG_TIDY to any value.');
+    }
+
     final List<bool> checkResults = <bool>[
-      await _runClangTidy(flutterRoot, verbose),
       await _runFormatter(flutterRoot, verbose),
+      if (enableClangTidy)
+        await _runClangTidy(flutterRoot, verbose),
     ];
     sw.stop();
     io.stdout.writeln('pre-push checks finished in ${sw.elapsed}');
@@ -37,7 +43,7 @@ class PrePushCommand extends Command<bool> {
     final Stopwatch sw = Stopwatch()..start();
     // First ensure that out/host_debug/compile_commands.json exists by running
     // //flutter/tools/gn.
-    final io.File compileCommands = io.File(path.join(
+    io.File compileCommands = io.File(path.join(
       flutterRoot,
       '..',
       'out',
@@ -45,14 +51,16 @@ class PrePushCommand extends Command<bool> {
       'compile_commands.json',
     ));
     if (!compileCommands.existsSync()) {
-      final bool gnResult = await _runCheck(
+      compileCommands = io.File(path.join(
         flutterRoot,
-        path.join(flutterRoot, 'tools', 'gn'),
-        <String>[],
-        'GN for host_debug',
-        verbose: verbose,
-      );
-      if (!gnResult) {
+        '..',
+        'out',
+        'host_debug_unopt',
+        'compile_commands.json',
+      ));
+      if (!compileCommands.existsSync()) {
+        io.stderr.writeln('clang-tidy requires a fully built host_debug or '
+                          'host_debug_unopt build directory');
         return false;
       }
     }

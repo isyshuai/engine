@@ -30,8 +30,19 @@ function follow_links() (
 SCRIPT_DIR=$(follow_links "$(dirname -- "${BASH_SOURCE[0]}")")
 SRC_DIR="$(cd "$SCRIPT_DIR/../.."; pwd -P)"
 FLUTTER_DIR="$SRC_DIR/flutter"
-SKY_ENGINE_DIR="$SRC_DIR/out/host_debug_unopt/gen/dart-pkg/sky_engine"
-DART_BIN="$SRC_DIR/out/host_debug_unopt/dart-sdk/bin"
+
+# This shell script takes one optional argument, the path to a dart-sdk/bin
+# directory. If not specified, we default to the build output for
+# host_debug_unopt.
+if [[ $# -eq 0 ]] ; then
+  DART_BIN="$SRC_DIR/out/host_debug_unopt/dart-sdk/bin"
+  if [[ ! -d "$DART_BIN" ]]; then
+    DART_BIN="$SRC_DIR/out/ci/host_debug_unopt/dart-sdk/bin"
+  fi
+else
+  DART_BIN="$1"
+fi
+
 DART="$DART_BIN/dart"
 
 if [[ ! -f "$DART" ]]; then
@@ -47,38 +58,22 @@ echo "Using dart from $DART_BIN"
 "$DART" --version
 echo ""
 
-(cd $SKY_ENGINE_DIR && "$DART" pub get --offline)
-"$DART" analyze "$SKY_ENGINE_DIR/lib/ui/ui.dart"
+# The web SDK does not use pub_get_offline.py, so we need to run pub get first:
+echo "Running 'pub get' in the Web SDK"
+echo ""
+(cd "$FLUTTER_DIR/lib/web_ui"; "$DART" pub --suppress-analytics get)
+(cd "$FLUTTER_DIR/web_sdk"; "$DART" pub --suppress-analytics get)
+(cd "$FLUTTER_DIR/web_sdk/web_test_utils"; "$DART" pub --suppress-analytics get)
+(cd "$FLUTTER_DIR/web_sdk/web_engine_tester"; "$DART" pub --suppress-analytics get)
 
-"$DART" analyze "$FLUTTER_DIR/lib/spirv"
-
-"$DART" analyze "$FLUTTER_DIR/ci"
-
-"$DART" analyze "$FLUTTER_DIR/flutter_frontend_server"
-
-"$DART" analyze "$FLUTTER_DIR/tools/licenses"
-
-"$DART" analyze "$FLUTTER_DIR/testing/litetest"
-
-"$DART" analyze "$FLUTTER_DIR/testing/benchmark"
-
-"$DART" analyze "$FLUTTER_DIR/testing/smoke_test_failure"
-
-"$DART" analyze "$FLUTTER_DIR/testing/dart"
-
-"$DART" analyze "$FLUTTER_DIR/testing/scenario_app"
-
-"$DART" analyze "$FLUTTER_DIR/testing/symbols"
-
-"$DART" analyze "$FLUTTER_DIR/tools/githooks"
-
-"$DART" analyze "$FLUTTER_DIR/tools/clang_tidy"
-
+# Check *all* the Dart code in the engine.
+echo "Analyzing the Flutter engine"
+echo ""
+"$DART" analyze --suppress-analytics --fatal-infos --fatal-warnings "$FLUTTER_DIR"
 echo ""
 
 # Check that dart libraries conform.
 echo "Checking the integrity of the Web SDK"
-(cd "$FLUTTER_DIR/web_sdk"; "$DART" pub get)
 WEB_SDK_TEST_FILES="$FLUTTER_DIR/web_sdk/test/*"
 for testFile in $WEB_SDK_TEST_FILES
 do

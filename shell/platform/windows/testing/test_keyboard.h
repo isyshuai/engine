@@ -10,15 +10,20 @@
 #include <functional>
 #include <string>
 
+#include "flutter/fml/macros.h"
 #include "flutter/shell/platform/embedder/embedder.h"
 #include "flutter/shell/platform/windows/testing/engine_modifier.h"
 #include "flutter/shell/platform/windows/testing/wm_builders.h"
 
 #include "gtest/gtest.h"
 
+struct _FlutterPlatformMessageResponseHandle {
+  FlutterDesktopBinaryReply callback;
+  void* user_data;
+};
+
 namespace flutter {
 namespace testing {
-
 ::testing::AssertionResult _EventEquals(const char* expr_event,
                                         const char* expr_expected,
                                         const FlutterKeyEvent& event,
@@ -48,10 +53,14 @@ class MockKeyResponseController {
   using EmbedderCallbackHandler =
       std::function<void(const FlutterKeyEvent*, ResponseCallback)>;
   using ChannelCallbackHandler = std::function<void(ResponseCallback)>;
+  using TextInputCallbackHandler =
+      std::function<void(std::unique_ptr<rapidjson::Document>)>;
 
   MockKeyResponseController()
       : channel_response_(ChannelRespondFalse),
-        embedder_response_(EmbedderRespondFalse) {}
+        embedder_response_(EmbedderRespondFalse),
+        text_input_response_(
+            [](std::unique_ptr<rapidjson::Document> document) {}) {}
 
   void SetChannelResponse(ChannelCallbackHandler handler) {
     channel_response_ = std::move(handler);
@@ -59,6 +68,10 @@ class MockKeyResponseController {
 
   void SetEmbedderResponse(EmbedderCallbackHandler handler) {
     embedder_response_ = std::move(handler);
+  }
+
+  void SetTextInputResponse(TextInputCallbackHandler handler) {
+    text_input_response_ = std::move(handler);
   }
 
   void HandleChannelMessage(ResponseCallback callback) {
@@ -70,9 +83,14 @@ class MockKeyResponseController {
     embedder_response_(event, std::move(callback));
   }
 
+  void HandleTextInputMessage(std::unique_ptr<rapidjson::Document> document) {
+    text_input_response_(std::move(document));
+  }
+
  private:
   EmbedderCallbackHandler embedder_response_;
   ChannelCallbackHandler channel_response_;
+  TextInputCallbackHandler text_input_response_;
 
   static void ChannelRespondFalse(ResponseCallback callback) {
     callback(false);
@@ -82,6 +100,8 @@ class MockKeyResponseController {
                                    ResponseCallback callback) {
     callback(false);
   }
+
+  FML_DISALLOW_COPY_AND_ASSIGN(MockKeyResponseController);
 };
 
 void MockEmbedderApiForKeyboard(
@@ -93,10 +113,14 @@ void MockEmbedderApiForKeyboard(
 // Subclasses must implement |Win32SendMessage| for how dispatched messages are
 // processed.
 class MockMessageQueue {
- public:
-  // Push a list of messages to the message queue, then dispatch
-  // them with |Win32SendMessage| one by one.
-  void InjectMessageList(int count, const Win32Message* messages);
+ protected:
+  // Push a message to the message queue without dispatching it.
+  void PushBack(const Win32Message* message);
+
+  // Dispatch the first message of the message queue and return its result.
+  //
+  // This method asserts that the queue is not empty.
+  LRESULT DispatchFront();
 
   // Peak the next message in the message queue.
   //
@@ -106,12 +130,13 @@ class MockMessageQueue {
                         UINT wMsgFilterMax,
                         UINT wRemoveMsg);
 
- protected:
+  // Simulate dispatching a message to the system.
   virtual LRESULT Win32SendMessage(UINT const message,
                                    WPARAM const wparam,
                                    LPARAM const lparam) = 0;
 
   std::list<Win32Message> _pending_messages;
+  std::list<Win32Message> _sent_messages;
 };
 
 }  // namespace testing
@@ -120,13 +145,17 @@ class MockMessageQueue {
 // Expect the |_target| FlutterKeyEvent has the required properties.
 #define EXPECT_EVENT_EQUALS(_target, _type, _physical, _logical, _character, \
                             _synthesized)                                    \
-  EXPECT_PRED_FORMAT2(_EventEquals, _target,                                 \
-                      (FlutterKeyEvent{                                      \
-                          .type = _type,                                     \
-                          .physical = _physical,                             \
-                          .logical = _logical,                               \
-                          .character = _character,                           \
-                          .synthesized = _synthesized,                       \
-                      }));
+  EXPECT_PRED_FORMAT2(                                                       \
+      _EventEquals, _target,                                                 \
+      (FlutterKeyEvent{                                                      \
+          /* struct_size = */ sizeof(FlutterKeyEvent),                       \
+          /* timestamp = */ 0,                                               \
+          /* type = */ _type,                                                \
+          /* physical = */ _physical,                                        \
+          /* logical = */ _logical,                                          \
+          /* character = */ _character,                                      \
+          /* synthesized = */ _synthesized,                                  \
+          /* device_type = */ kFlutterKeyEventDeviceTypeKeyboard,            \
+      }));
 
 #endif  // FLUTTER_SHELL_PLATFORM_WINDOWS_TESTING_TEST_KEYBOARD_H_

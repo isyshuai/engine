@@ -7,10 +7,12 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:litetest/litetest.dart';
+import 'package:test/test.dart';
+
+typedef FutureFunction = Future<Object?> Function();
 
 /// Asserts that `callback` throws an exception of type `T`.
-Future<void> asyncExpectThrows<T>(Function callback) async {
+Future<void> asyncExpectThrows<T>(FutureFunction callback) async {
   bool threw = false;
   try {
     await callback();
@@ -23,7 +25,7 @@ Future<void> asyncExpectThrows<T>(Function callback) async {
 
 Future<String> getLocalHostIP() async {
   final List<NetworkInterface> interfaces = await NetworkInterface.list(
-      includeLoopback: false, type: InternetAddressType.IPv4);
+      type: InternetAddressType.IPv4);
   return interfaces.first.addresses.first.address;
 }
 
@@ -89,7 +91,7 @@ void main() {
         zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: mockTrue});
       expect(mockFalse.checked, isTrue);
     });
-  });
+  }, skip: Platform.isMacOS); // https://github.com/flutter/flutter/issues/141149
 
   test('testWithLoopback', () async {
     await bindServerAndTest('127.0.0.1', (HttpClient httpClient, Uri uri) async {
@@ -110,7 +112,7 @@ void main() {
 class _MockZoneValue {
   _MockZoneValue(this._value);
 
-  Object? _value;
+  final Object? _value;
   bool _falseChecked = false;
   bool _trueChecked = false;
 

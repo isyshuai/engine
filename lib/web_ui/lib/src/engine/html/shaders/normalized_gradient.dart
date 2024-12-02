@@ -22,11 +22,6 @@ import 'shader_builder.dart';
 ///              scale = (c2 - c1) / (t2 - t1)
 ///              bias = c1 - t1 / (t2 - t1) * (c2 - c1)
 class NormalizedGradient {
-  final Float32List _thresholds;
-  final Float32List _bias;
-  final Float32List _scale;
-  final int thresholdCount;
-
   factory NormalizedGradient(List<ui.Color> colors, {List<double>? stops}) {
     // If colorStops is not provided, then only two stops, at 0.0 and 1.0,
     // are implied (and colors must therefore only have two entries).
@@ -34,6 +29,7 @@ class NormalizedGradient {
     stops ??= const <double>[0.0, 1.0];
     final int colorCount = colors.length;
     int normalizedCount = colorCount;
+    final bool isOpaque = !colors.any((ui.Color c) => c.alpha < 1.0);
     final bool addFirst = stops[0] != 0.0;
     final bool addLast = stops.last != 1.0;
     if (addFirst) {
@@ -94,11 +90,17 @@ class NormalizedGradient {
       bias[colorIndex + 2] -= t * scale[colorIndex + 2];
       bias[colorIndex + 3] -= t * scale[colorIndex + 3];
     }
-    return NormalizedGradient._(normalizedCount, thresholds, scale, bias);
+    return NormalizedGradient._(normalizedCount, thresholds, scale, bias, isOpaque);
   }
 
   NormalizedGradient._(
-      this.thresholdCount, this._thresholds, this._scale, this._bias);
+      this.thresholdCount, this._thresholds, this._scale, this._bias, this.isOpaque);
+
+  final Float32List _thresholds;
+  final Float32List _bias;
+  final Float32List _scale;
+  final int thresholdCount;
+  final bool isOpaque;
 
   /// Sets uniforms for threshold, bias and scale for program.
   void setupUniforms(GlContext gl, GlProgram glProgram) {

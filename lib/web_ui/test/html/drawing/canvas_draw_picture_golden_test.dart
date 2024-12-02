@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
-
 import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 
+import '../../common/test_initialization.dart';
 import '../screenshot.dart';
 
 const Rect region = Rect.fromLTWH(0, 0, 500, 100);
@@ -20,12 +19,17 @@ void main() {
 SurfacePaint makePaint() => Paint() as SurfacePaint;
 
 Future<void> testMain() async {
-  setUp(() async {
+  setUpUnitTests(
+    emulateTesterEnvironment: false,
+    setUpTestViewDimensions: false,
+  );
+
+  setUpAll(() async {
     debugShowClipLayers = true;
+  });
+
+  setUp(() async {
     SurfaceSceneBuilder.debugForgetFrameScene();
-    await webOnlyInitializePlatform();
-    webOnlyFontCollection.debugRegisterTestFonts();
-    await webOnlyFontCollection.ensureFontsLoaded();
   });
 
   group('Add picture to scene', () {
@@ -38,10 +42,10 @@ Future<void> testMain() async {
       _drawTestPicture(builder, 100, false);
       builder.pop();
 
-      final html.Element elm1 = builder
+      final DomElement elm1 = builder
           .build()
           .webOnlyRootElement!;
-      html.document.body!.append(elm1);
+      domDocument.body!.append(elm1);
 
       // Now draw picture again but at larger size.
       final SurfaceSceneBuilder builder2 = SurfaceSceneBuilder();
@@ -68,10 +72,10 @@ Future<void> testMain() async {
       _drawTestPicture(builder, 100, true);
       builder.pop();
 
-      final html.Element elm1 = builder
+      final DomElement elm1 = builder
           .build()
           .webOnlyRootElement!;
-      html.document.body!.append(elm1);
+      domDocument.body!.append(elm1);
 
       // Now draw picture again but at larger size.
       final SurfaceSceneBuilder builder2 = SurfaceSceneBuilder();
@@ -132,8 +136,6 @@ Picture _drawGreenRectIntoPicture() {
   return recorder.endRecording();
 }
 
-typedef PaintCallback = void Function(RecordingCanvas canvas);
-
 const String _base64Encoded20x20TestImage =
     'iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAACXBIWXMAAC4jAAAuIwF4pT92AAAA'
     'B3RJTUUH5AMFFBksg4i3gQAAABl0RVh0Q29tbWVudABDcmVhdGVkIHdpdGggR0lNUFeBDhcAAAAj'
@@ -141,7 +143,7 @@ const String _base64Encoded20x20TestImage =
 
 HtmlImage _createRealTestImage() {
   return HtmlImage(
-    html.ImageElement()
+    createDomHTMLImageElement()
       ..src = 'data:text/plain;base64,$_base64Encoded20x20TestImage',
     20,
     20,

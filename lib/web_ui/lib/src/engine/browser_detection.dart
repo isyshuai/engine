@@ -2,40 +2,95 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
-
 import 'package:meta/meta.dart';
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
-// iOS 15 launched WebGL 2.0, but there's something broken about it, which
-// leads to apps failing to load. For now, we're forcing WebGL 1 on iOS.
-//
-// TODO(yjbanov): https://github.com/flutter/flutter/issues/91333
-bool get _workAroundBug91333 => operatingSystem == OperatingSystem.iOs;
+import 'dom.dart';
 
-/// The HTML engine used by the current browser.
-enum BrowserEngine {
-  /// The engine that powers Chrome, Samsung Internet Browser, UC Browser,
-  /// Microsoft Edge, Opera, and others.
-  blink,
+/// A flag to check if the current browser is running on a laptop/desktop device.
+bool get isDesktop => ui_web.browser.isDesktop;
 
-  /// The engine that powers Safari.
-  webkit,
+/// A flag to check if the current browser is running on a mobile device.
+///
+/// Flutter web considers "mobile" everything that's not [isDesktop].
+bool get isMobile => ui_web.browser.isMobile;
 
-  /// The engine that powers Firefox.
-  firefox,
+/// Whether the current browser is [ui_web.BrowserEngine.blink] (Chrom(e|ium)).
+bool get isChromium => ui_web.browser.isChromium;
 
-  /// The engine that powers Edge.
-  edge,
+/// Whether the current browser is [ui_web.BrowserEngine.webkit] (Safari).
+bool get isSafari => ui_web.browser.isSafari;
 
-  /// The engine that powers Internet Explorer 11.
-  ie11,
+/// Whether the current browser is [ui_web.BrowserEngine.firefox].
+bool get isFirefox => ui_web.browser.isFirefox;
 
-  /// The engine that powers Samsung stock browser. It is based on blink.
-  samsung,
+/// Whether the current browser is Edge.
+bool get isEdge => ui_web.browser.isEdge;
 
-  /// We were unable to detect the current browser engine.
-  unknown,
+/// Whether we are running from a wasm module compiled with dart2wasm.
+///
+/// Note: Currently the ffi library is available from dart2wasm but not dart2js
+/// or dartdevc.
+bool get isWasm => ui_web.browser.isWasm;
+
+// Whether the detected `operatingSystem` is `OperatingSystem.iOs`.
+bool get _isIOS => ui_web.browser.operatingSystem == ui_web.OperatingSystem.iOs;
+
+/// Whether the browser is running on macOS or iOS.
+///
+/// - See [operatingSystem].
+/// - See [OperatingSystem].
+bool get isMacOrIOS => _isIOS || ui_web.browser.operatingSystem == ui_web.OperatingSystem.macOs;
+
+/// Detect iOS 15.
+bool get isIOS15 => debugIsIOS15 ?? _isIOS && ui_web.browser.userAgent.contains('OS 15_');
+
+/// Use in tests to simulate the detection of iOS 15.
+bool? debugIsIOS15;
+
+/// Detect if running on Chrome version 110 or older.
+///
+/// These versions of Chrome have a bug which causes rendering to be flipped
+/// upside down when using `createImageBitmap`: see
+/// https://chromium.googlesource.com/chromium/src/+/a7f9b00e422a1755918f8ca5500380f98b6fddf2
+// TODO(harryterkelsen): Remove this check once we stop supporting Chrome 110
+// and earlier, https://github.com/flutter/flutter/issues/139186.
+bool get isChrome110OrOlder {
+  if (debugIsChrome110OrOlder != null) {
+    return debugIsChrome110OrOlder!;
+  }
+  if (_cachedIsChrome110OrOlder != null) {
+    return _cachedIsChrome110OrOlder!;
+  }
+  final RegExp chromeRegexp = RegExp(r'Chrom(e|ium)\/([0-9]+)\.');
+  final RegExpMatch? match =
+      chromeRegexp.firstMatch(ui_web.browser.userAgent);
+  if (match != null) {
+    final int chromeVersion = int.parse(match.group(2)!);
+    return _cachedIsChrome110OrOlder = chromeVersion <= 110;
+  }
+  return _cachedIsChrome110OrOlder = false;
 }
+
+// Cache the result of checking if the app is running on Chrome 110 on Windows
+// since we check this on every frame.
+bool? _cachedIsChrome110OrOlder;
+
+/// Used in tests to simulate the detection of Chrome 110 or older on Windows.
+bool? debugIsChrome110OrOlder;
+
+/// Returns true if the browser is iOS Safari, false otherwise.
+bool get isIosSafari => debugEmulateIosSafari || _isActualIosSafari;
+
+bool get _isActualIosSafari =>
+    ui_web.browser.browserEngine == ui_web.BrowserEngine.webkit &&
+    ui_web.browser.operatingSystem == ui_web.OperatingSystem.iOs;
+
+/// If set to true pretends that the current browser is iOS Safari.
+///
+/// Useful for tests. Do not use in production code.
+@visibleForTesting
+bool debugEmulateIosSafari = false;
 
 /// html webgl version qualifier constants.
 abstract class WebGLVersion {
@@ -46,205 +101,12 @@ abstract class WebGLVersion {
   static const int webgl2 = 2;
 }
 
-/// Lazily initialized current browser engine.
-late final BrowserEngine _browserEngine = _detectBrowserEngine();
-
-/// Override the value of [browserEngine].
-///
-/// Setting this to `null` lets [browserEngine] detect the browser that the
-/// app is running on.
-///
-/// This is intended to be used for testing and debugging only.
-BrowserEngine? debugBrowserEngineOverride;
-
-/// Returns the [BrowserEngine] used by the current browser.
-///
-/// This is used to implement browser-specific behavior.
-BrowserEngine get browserEngine {
-  return debugBrowserEngineOverride ?? _browserEngine;
-}
-
-BrowserEngine _detectBrowserEngine() {
-  final String vendor = html.window.navigator.vendor;
-  final String agent = html.window.navigator.userAgent.toLowerCase();
-  return detectBrowserEngineByVendorAgent(vendor, agent);
-}
-
-/// Detects samsung blink variants.
-///
-///  Example patterns:
-///    Note 2 : GT-N7100
-///    Note 3 : SM-N900T
-///    Tab 4 : SM-T330NU
-///    Galaxy S4: SHV-E330S
-///    Galaxy Note2: SHV-E250L
-///    Note: SAMSUNG-SGH-I717
-///    SPH/SCH are very old Palm models.
-bool _isSamsungBrowser(String agent) {
-  final RegExp exp = RegExp(
-      r'SAMSUNG|SGH-[I|N|T]|GT-[I|N]|SM-[A|N|P|T|Z]|SHV-E|SCH-[I|J|R|S]|SPH-L');
-  return exp.hasMatch(agent.toUpperCase());
-}
-
-/// Detects browser engine for a given vendor and agent string.
-///
-/// Used for testing this library.
-@visibleForTesting
-BrowserEngine detectBrowserEngineByVendorAgent(String vendor, String agent) {
-  if (vendor == 'Google Inc.') {
-    // Samsung browser is based on blink, check for variant.
-    if (_isSamsungBrowser(agent)) {
-      return BrowserEngine.samsung;
-    }
-    return BrowserEngine.blink;
-  } else if (vendor == 'Apple Computer, Inc.') {
-    return BrowserEngine.webkit;
-  } else if (agent.contains('edge/')) {
-    return BrowserEngine.edge;
-  } else if (agent.contains('Edg/')) {
-    // Chromium based Microsoft Edge has `Edg` in the user-agent.
-    // https://docs.microsoft.com/en-us/microsoft-edge/web-platform/user-agent-string
-    return BrowserEngine.blink;
-  } else if (agent.contains('trident/7.0')) {
-    return BrowserEngine.ie11;
-  } else if (vendor == '' && agent.contains('firefox')) {
-    // An empty string means firefox:
-    // https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vendor
-    return BrowserEngine.firefox;
-  }
-  // Assume unknown otherwise, but issue a warning.
-  print('WARNING: failed to detect current browser engine.');
-  return BrowserEngine.unknown;
-}
-
-/// Operating system where the current browser runs.
-///
-/// Taken from the navigator platform.
-/// <https://developer.mozilla.org/en-US/docs/Web/API/NavigatorID/platform>
-enum OperatingSystem {
-  /// iOS: <http://www.apple.com/ios/>
-  iOs,
-
-  /// Android: <https://www.android.com/>
-  android,
-
-  /// Linux: <https://www.linux.org/>
-  linux,
-
-  /// Windows: <https://www.microsoft.com/windows/>
-  windows,
-
-  /// MacOs: <https://www.apple.com/macos/>
-  macOs,
-
-  /// We were unable to detect the current operating system.
-  unknown,
-}
-
-/// Lazily initialized current operating system.
-late final OperatingSystem _operatingSystem = detectOperatingSystem();
-
-/// Returns the [OperatingSystem] the current browsers works on.
-///
-/// This is used to implement operating system specific behavior such as
-/// soft keyboards.
-OperatingSystem get operatingSystem {
-  return debugOperatingSystemOverride ?? _operatingSystem;
-}
-
-/// Override the value of [operatingSystem].
-///
-/// Setting this to `null` lets [operatingSystem] detect the real OS that the
-/// app is running on.
-///
-/// This is intended to be used for testing and debugging only.
-OperatingSystem? debugOperatingSystemOverride;
-
-/// Detects operating system using platform and UA used for unit testing.
-@visibleForTesting
-OperatingSystem detectOperatingSystem({
-  String? overridePlatform,
-  String? overrideUserAgent,
-  int? overrideMaxTouchPoints,
-}) {
-  final String platform = overridePlatform ?? html.window.navigator.platform!;
-  final String userAgent = overrideUserAgent ?? html.window.navigator.userAgent;
-
-  if (platform.startsWith('Mac')) {
-    // iDevices requesting a "desktop site" spoof their UA so it looks like a Mac.
-    // This checks if we're in a touch device, or on a real mac.
-    final int maxTouchPoints =
-        overrideMaxTouchPoints ?? html.window.navigator.maxTouchPoints ?? 0;
-    if (maxTouchPoints > 2) {
-      return OperatingSystem.iOs;
-    }
-    return OperatingSystem.macOs;
-  } else if (platform.toLowerCase().contains('iphone') ||
-      platform.toLowerCase().contains('ipad') ||
-      platform.toLowerCase().contains('ipod')) {
-    return OperatingSystem.iOs;
-  } else if (userAgent.contains('Android')) {
-    // The Android OS reports itself as "Linux armv8l" in
-    // [html.window.navigator.platform]. So we have to check the user-agent to
-    // determine if the OS is Android or not.
-    return OperatingSystem.android;
-  } else if (platform.startsWith('Linux')) {
-    return OperatingSystem.linux;
-  } else if (platform.startsWith('Win')) {
-    return OperatingSystem.windows;
-  } else {
-    return OperatingSystem.unknown;
-  }
-}
-
-/// List of Operating Systems we know to be working on laptops/desktops.
-///
-/// These devices tend to behave differently on many core issues such as events,
-/// screen readers, input devices.
-const Set<OperatingSystem> _desktopOperatingSystems = <OperatingSystem>{
-  OperatingSystem.macOs,
-  OperatingSystem.linux,
-  OperatingSystem.windows,
-};
-
-/// A flag to check if the current operating system is a laptop/desktop
-/// operating system.
-///
-/// See [_desktopOperatingSystems].
-bool get isDesktop => _desktopOperatingSystems.contains(operatingSystem);
-
-/// A flag to check if the current browser is running on a mobile device.
-///
-/// See [_desktopOperatingSystems].
-/// See [isDesktop].
-bool get isMobile => !isDesktop;
-
-/// Whether the browser is running on macOS or iOS.
-///
-/// - See [operatingSystem].
-/// - See [OperatingSystem].
-bool get isMacOrIOS =>
-    operatingSystem == OperatingSystem.iOs ||
-    operatingSystem == OperatingSystem.macOs;
-
-/// Detect iOS 15.
-bool get isIOS15 {
-  if (debugIsIOS15 != null) {
-    return debugIsIOS15!;
-  }
-  return operatingSystem == OperatingSystem.iOs &&
-      html.window.navigator.userAgent.contains('OS 15_');
-}
-
-/// Use in tests to simulate the detection of iOS 15.
-bool? debugIsIOS15;
-
-int? _cachedWebGLVersion;
-
 /// The highest WebGL version supported by the current browser, or -1 if WebGL
 /// is not supported.
 int get webGLVersion =>
     _cachedWebGLVersion ?? (_cachedWebGLVersion = _detectWebGLVersion());
+
+int? _cachedWebGLVersion;
 
 /// Detects the highest WebGL version supported by the current browser, or
 /// -1 if WebGL is not supported.
@@ -256,7 +118,7 @@ int get webGLVersion =>
 ///
 /// Our CanvasKit backend is affected due to: https://github.com/emscripten-core/emscripten/issues/11819
 int _detectWebGLVersion() {
-  final html.CanvasElement canvas = html.CanvasElement(
+  final DomCanvasElement canvas = createDomCanvasElement(
     width: 1,
     height: 1,
   );
@@ -271,3 +133,13 @@ int _detectWebGLVersion() {
   }
   return -1;
 }
+
+// iOS 15 launched WebGL 2.0, but there's something broken about it, which
+// leads to apps failing to load. For now, we're forcing WebGL 1 on iOS.
+//
+// TODO(yjbanov): https://github.com/flutter/flutter/issues/91333
+bool get _workAroundBug91333 => _isIOS;
+
+/// Whether the current browser supports the Chromium variant of CanvasKit.
+bool get browserSupportsCanvaskitChromium =>
+    domIntl.v8BreakIterator != null && domIntl.Segmenter != null;

@@ -18,7 +18,7 @@ template <typename... Args>
 std::string StringPrintf(const std::string& format, Args... args) {
   // Calculate the buffer size.
   int size = snprintf(nullptr, 0, format.c_str(), args...) + 1;
-  std::unique_ptr<char[]> buf(new char[size]);
+  std::unique_ptr<char[]> buf = std::make_unique<char[]>(size);
   snprintf(buf.get(), size, format.c_str(), args...);
   return std::string(buf.get(), buf.get() + size - 1);
 }
@@ -26,8 +26,6 @@ std::string StringPrintf(const std::string& format, Args... args) {
 std::u16string ASCIIToUTF16(std::string src);
 std::u16string UTF8ToUTF16(std::string src);
 std::string UTF16ToUTF8(std::u16string src);
-std::u16string WideToUTF16(const std::wstring& src);
-std::wstring UTF16ToWide(const std::u16string& src);
 
 std::u16string NumberToString16(unsigned int number);
 std::u16string NumberToString16(int32_t number);

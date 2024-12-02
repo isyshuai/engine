@@ -9,7 +9,11 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "flutter/shell/platform/windows/external_texture_gl.h"
+#include "flutter/fml/closure.h"
+#include "flutter/fml/macros.h"
+#include "flutter/shell/platform/common/public/flutter_texture_registrar.h"
+#include "flutter/shell/platform/windows/egl/proc_table.h"
+#include "flutter/shell/platform/windows/external_texture.h"
 
 namespace flutter {
 
@@ -20,15 +24,14 @@ class FlutterWindowsEngine;
 class FlutterWindowsTextureRegistrar {
  public:
   explicit FlutterWindowsTextureRegistrar(FlutterWindowsEngine* engine,
-                                          const GlProcs& gl_procs);
+                                          std::shared_ptr<egl::ProcTable> gl);
 
   // Registers a texture described by the given |texture_info| object.
   // Returns the non-zero, positive texture id or -1 on error.
   int64_t RegisterTexture(const FlutterDesktopTextureInfo* texture_info);
 
   // Attempts to unregister the texture identified by |texture_id|.
-  // Returns true if the texture was successfully unregistered.
-  bool UnregisterTexture(int64_t texture_id);
+  void UnregisterTexture(int64_t texture_id, fml::closure callback = nullptr);
 
   // Notifies the engine about a new frame being available.
   // Returns true on success.
@@ -42,17 +45,18 @@ class FlutterWindowsTextureRegistrar {
                        size_t height,
                        FlutterOpenGLTexture* texture);
 
-  // Populates the OpenGL function pointers in |gl_procs|.
-  static void ResolveGlFunctions(GlProcs& gl_procs);
-
  private:
   FlutterWindowsEngine* engine_ = nullptr;
-  const GlProcs& gl_procs_;
+  std::shared_ptr<egl::ProcTable> gl_;
 
   // All registered textures, keyed by their IDs.
-  std::unordered_map<int64_t, std::unique_ptr<flutter::ExternalTextureGL>>
+  std::unordered_map<int64_t, std::unique_ptr<flutter::ExternalTexture>>
       textures_;
   std::mutex map_mutex_;
+
+  int64_t EmplaceTexture(std::unique_ptr<ExternalTexture> texture);
+
+  FML_DISALLOW_COPY_AND_ASSIGN(FlutterWindowsTextureRegistrar);
 };
 
 };  // namespace flutter

@@ -2,22 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_RUNTIME_ISOLATE_CONFIGURATION_H_
-#define FLUTTER_SHELL_RUNTIME_ISOLATE_CONFIGURATION_H_
+#ifndef FLUTTER_RUNTIME_ISOLATE_CONFIGURATION_H_
+#define FLUTTER_RUNTIME_ISOLATE_CONFIGURATION_H_
 
 #include <future>
 #include <memory>
-#include <string>
 
 #include "flutter/assets/asset_manager.h"
 #include "flutter/assets/asset_resolver.h"
 #include "flutter/common/settings.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/mapping.h"
-#include "flutter/fml/memory/weak_ptr.h"
 #include "flutter/runtime/dart_isolate.h"
 
 namespace flutter {
+
+/// Describes whether the isolate is part of a group or not.
+///
+/// If the isolate is part of a group, it avoids reloading the kernel snapshot.
+enum class IsolateLaunchType {
+  /// The isolate is launched as a solo isolate or to start a new group.
+  kNewGroup,
+  /// The isolate is launched as part of a group, and avoids reloading the
+  /// kernel snapshot.
+  kExistingGroup,
+};
 
 //------------------------------------------------------------------------------
 /// @brief      An isolate configuration is a collection of snapshots and asset
@@ -57,14 +66,19 @@ class IsolateConfiguration {
   /// @param[in]  io_worker      An optional IO worker. Specify `nullptr` if a
   ///                            worker should not be used or one is not
   ///                            available.
+  /// @param[in]  launch_type    Whether the isolate is launching to form a new
+  ///                            group or as part of an existing group. If it is
+  ///                            part of an existing group, the isolate will
+  ///                            reuse resources if it can.
   ///
   /// @return     An isolate configuration if one can be inferred from the
   ///             settings. If not, returns `nullptr`.
   ///
   [[nodiscard]] static std::unique_ptr<IsolateConfiguration> InferFromSettings(
       const Settings& settings,
-      std::shared_ptr<AssetManager> asset_manager = nullptr,
-      fml::RefPtr<fml::TaskRunner> io_worker = nullptr);
+      const std::shared_ptr<AssetManager>& asset_manager = nullptr,
+      const fml::RefPtr<fml::TaskRunner>& io_worker = nullptr,
+      IsolateLaunchType launch_type = IsolateLaunchType::kNewGroup);
 
   //----------------------------------------------------------------------------
   /// @brief      Creates an AOT isolate configuration using snapshot symbols
@@ -168,4 +182,4 @@ class IsolateConfiguration {
 
 }  // namespace flutter
 
-#endif  // FLUTTER_SHELL_RUNTIME_ISOLATE_CONFIGURATION_H_
+#endif  // FLUTTER_RUNTIME_ISOLATE_CONFIGURATION_H_

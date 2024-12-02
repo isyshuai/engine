@@ -4,17 +4,25 @@
 
 package io.flutter.embedding.android;
 
+import static io.flutter.Build.API_LEVELS;
+
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.graphics.Insets;
 import android.graphics.Rect;
+import android.hardware.display.DisplayManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.AttributeSet;
 import android.util.SparseArray;
+import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -25,12 +33,13 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewStructure;
 import android.view.WindowInsets;
-import android.view.WindowManager;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.autofill.AutofillValue;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.textservice.SpellCheckerInfo;
+import android.view.textservice.TextServicesManager;
 import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -53,6 +62,9 @@ import io.flutter.embedding.engine.renderer.FlutterRenderer.DisplayFeatureType;
 import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener;
 import io.flutter.embedding.engine.renderer.RenderSurface;
 import io.flutter.embedding.engine.systemchannels.SettingsChannel;
+import io.flutter.plugin.common.BinaryMessenger;
+import io.flutter.plugin.editing.ScribePlugin;
+import io.flutter.plugin.editing.SpellCheckPlugin;
 import io.flutter.plugin.editing.TextInputPlugin;
 import io.flutter.plugin.localization.LocalizationPlugin;
 import io.flutter.plugin.mouse.MouseCursorPlugin;
@@ -94,7 +106,8 @@ import java.util.Set;
  * See <a>https://source.android.com/devices/graphics/arch-tv#surface_or_texture</a> for more
  * information comparing {@link android.view.SurfaceView} and {@link android.view.TextureView}.
  */
-public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseCursorViewDelegate {
+public class FlutterView extends FrameLayout
+    implements MouseCursorPlugin.MouseCursorViewDelegate, KeyboardManager.ViewDelegate {
   private static final String TAG = "FlutterView";
 
   // Internal view hierarchy references.
@@ -117,13 +130,16 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   // possibly storing intermediate state, and communicating those events to Flutter.
   //
   // These components essentially add some additional behavioral logic on top of
-  // existing, stateless system channels, e.g., KeyEventChannel, TextInputChannel, etc.
+  // existing, stateless system channels, e.g., MouseCursorChannel, TextInputChannel, etc.
   @Nullable private MouseCursorPlugin mouseCursorPlugin;
   @Nullable private TextInputPlugin textInputPlugin;
+  @Nullable private SpellCheckPlugin spellCheckPlugin;
+  @Nullable private ScribePlugin scribePlugin;
   @Nullable private LocalizationPlugin localizationPlugin;
   @Nullable private KeyboardManager keyboardManager;
   @Nullable private AndroidTouchProcessor androidTouchProcessor;
   @Nullable private AccessibilityBridge accessibilityBridge;
+  @Nullable private TextServicesManager textServicesManager;
 
   // Provides access to foldable/hinge information
   @Nullable private WindowInfoRepositoryCallbackAdapterWrapper windowInfoRepo;
@@ -137,6 +153,25 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         public void onAccessibilityChanged(
             boolean isAccessibilityEnabled, boolean isTouchExplorationEnabled) {
           resetWillNotDraw(isAccessibilityEnabled, isTouchExplorationEnabled);
+        }
+      };
+
+  private final ContentObserver systemSettingsObserver =
+      new ContentObserver(new Handler(Looper.getMainLooper())) {
+        @Override
+        public void onChange(boolean selfChange) {
+          super.onChange(selfChange);
+          if (flutterEngine == null) {
+            return;
+          }
+          Log.v(TAG, "System settings changed. Sending user settings to Flutter.");
+          sendUserSettingsToFlutter();
+        }
+
+        @Override
+        public boolean deliverSelfNotifications() {
+          // The Flutter app may change system settings.
+          return true;
         }
       };
 
@@ -161,13 +196,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         }
       };
 
-  private final Consumer<WindowLayoutInfo> windowInfoListener =
-      new Consumer<WindowLayoutInfo>() {
-        @Override
-        public void accept(WindowLayoutInfo layoutInfo) {
-          setWindowInfoListenerDisplayFeatures(layoutInfo);
-        }
-      };
+  private Consumer<WindowLayoutInfo> windowInfoListener;
 
   /**
    * Constructs a {@code FlutterView} programmatically, without any XML attributes.
@@ -203,7 +232,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       renderSurface = flutterTextureView;
     } else {
       throw new IllegalArgumentException(
-          String.format("RenderMode not supported with this constructor: %s", renderMode));
+          "RenderMode not supported with this constructor: " + renderMode);
     }
 
     init();
@@ -260,7 +289,6 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * <p>{@code FlutterView} requires an {@code Activity} instead of a generic {@code Context} to be
    * compatible with {@link PlatformViewsController}.
    */
-  @TargetApi(19)
   public FlutterView(@NonNull Context context, @NonNull FlutterImageView flutterImageView) {
     this(context, null, flutterImageView);
   }
@@ -297,7 +325,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       renderSurface = flutterTextureView;
     } else {
       throw new IllegalArgumentException(
-          String.format("RenderMode not supported with this constructor: %s", renderMode));
+          "RenderMode not supported with this constructor: " + renderMode);
     }
 
     init();
@@ -327,7 +355,6 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     init();
   }
 
-  @TargetApi(19)
   private FlutterView(
       @NonNull Context context,
       @Nullable AttributeSet attrs,
@@ -357,8 +384,8 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     // FlutterView needs to be focusable so that the InputMethodManager can interact with it.
     setFocusable(true);
     setFocusableInTouchMode(true);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES_EXCLUDE_DESCENDANTS);
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_26) {
+      setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
     }
   }
 
@@ -421,6 +448,8 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       Log.v(TAG, "Configuration changed. Sending locales and user settings to Flutter.");
       localizationPlugin.sendLocalesToFlutter(newConfig);
       sendUserSettingsToFlutter();
+
+      ViewUtils.calculateMaximumDisplayMetrics(getContext(), flutterEngine);
     }
   }
 
@@ -479,6 +508,10 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     this.windowInfoRepo = createWindowInfoRepo();
     Activity activity = ViewUtils.getActivity(getContext());
     if (windowInfoRepo != null && activity != null) {
+      // Creating windowInfoListener on-demand instead of at initialization is necessary in order to
+      // prevent it from capturing the wrong instance of `this` when spying for testing.
+      // See https://github.com/mockito/mockito/issues/3479
+      windowInfoListener = this::setWindowInfoListenerDisplayFeatures;
       windowInfoRepo.addWindowLayoutInfoListener(
           activity, ContextCompat.getMainExecutor(getContext()), windowInfoListener);
     }
@@ -491,9 +524,10 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    */
   @Override
   protected void onDetachedFromWindow() {
-    if (windowInfoRepo != null) {
+    if (windowInfoRepo != null && windowInfoListener != null) {
       windowInfoRepo.removeWindowLayoutInfoListener(windowInfoListener);
     }
+    windowInfoListener = null;
     this.windowInfoRepo = null;
     super.onDetachedFromWindow();
   }
@@ -502,14 +536,14 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * Refresh {@link androidx.window.layout.WindowInfoTracker} and {@link android.view.DisplayCutout}
    * display features. Fold, hinge and cutout areas are populated here.
    */
-  @TargetApi(28)
+  @TargetApi(API_LEVELS.API_28)
   protected void setWindowInfoListenerDisplayFeatures(WindowLayoutInfo layoutInfo) {
-    List<DisplayFeature> displayFeatures = layoutInfo.getDisplayFeatures();
-    List<FlutterRenderer.DisplayFeature> result = new ArrayList<>();
+    List<DisplayFeature> newDisplayFeatures = layoutInfo.getDisplayFeatures();
+    List<FlutterRenderer.DisplayFeature> flutterDisplayFeatures = new ArrayList<>();
 
     // Data from WindowInfoTracker display features. Fold and hinge areas are
     // populated here.
-    for (DisplayFeature displayFeature : displayFeatures) {
+    for (DisplayFeature displayFeature : newDisplayFeatures) {
       Log.v(
           TAG,
           "WindowInfoTracker Display Feature reported with bounds = "
@@ -532,31 +566,17 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         } else {
           state = DisplayFeatureState.UNKNOWN;
         }
-        result.add(new FlutterRenderer.DisplayFeature(displayFeature.getBounds(), type, state));
+        flutterDisplayFeatures.add(
+            new FlutterRenderer.DisplayFeature(displayFeature.getBounds(), type, state));
       } else {
-        result.add(
+        flutterDisplayFeatures.add(
             new FlutterRenderer.DisplayFeature(
                 displayFeature.getBounds(),
                 DisplayFeatureType.UNKNOWN,
                 DisplayFeatureState.UNKNOWN));
       }
     }
-
-    // Data from the DisplayCutout bounds. Cutouts for cameras and other sensors are
-    // populated here. DisplayCutout was introduced in API 28.
-    if (Build.VERSION.SDK_INT >= 28) {
-      WindowInsets insets = getRootWindowInsets();
-      if (insets != null) {
-        DisplayCutout cutout = insets.getDisplayCutout();
-        if (cutout != null) {
-          for (Rect bounds : cutout.getBoundingRects()) {
-            Log.v(TAG, "DisplayCutout area reported with bounds = " + bounds.toString());
-            result.add(new FlutterRenderer.DisplayFeature(bounds, DisplayFeatureType.CUTOUT));
-          }
-        }
-      }
-    }
-    viewportMetrics.displayFeatures = result;
+    viewportMetrics.setDisplayFeatures(flutterDisplayFeatures);
     sendViewportMetricsToFlutter();
   }
 
@@ -565,31 +585,40 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   // android may decide to place the software navigation bars on the side. When the nav
   // bar is hidden, the reported insets should be removed to prevent extra useless space
   // on the sides.
-  private enum ZeroSides {
+  @VisibleForTesting
+  public enum ZeroSides {
     NONE,
     LEFT,
     RIGHT,
     BOTH
   }
 
-  private ZeroSides calculateShouldZeroSides() {
+  /**
+   * This method can be run on APIs 30 and above but its intended use is for 30 and below.
+   *
+   * @return some ZeroSides enum
+   */
+  @androidx.annotation.DeprecatedSinceApi(api = API_LEVELS.API_30)
+  @VisibleForTesting
+  public ZeroSides calculateShouldZeroSides() {
     // We get both orientation and rotation because rotation is all 4
     // rotations relative to default rotation while orientation is portrait
     // or landscape. By combining both, we can obtain a more precise measure
     // of the rotation.
     Context context = getContext();
     int orientation = context.getResources().getConfiguration().orientation;
-    int rotation =
-        ((WindowManager) context.getSystemService(Context.WINDOW_SERVICE))
-            .getDefaultDisplay()
-            .getRotation();
 
     if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+      int rotation =
+          ((DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE))
+              .getDisplay(Display.DEFAULT_DISPLAY)
+              .getRotation();
+
       if (rotation == Surface.ROTATION_90) {
         return ZeroSides.RIGHT;
       } else if (rotation == Surface.ROTATION_270) {
         // In android API >= 23, the nav bar always appears on the "bottom" (USB) side.
-        return Build.VERSION.SDK_INT >= 23 ? ZeroSides.LEFT : ZeroSides.RIGHT;
+        return Build.VERSION.SDK_INT >= API_LEVELS.API_23 ? ZeroSides.LEFT : ZeroSides.RIGHT;
       }
       // Ambiguous orientation due to landscape left/right default. Zero both sides.
       else if (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180) {
@@ -611,8 +640,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   //
   // This method is replaced by Android API 30 (R/11) getInsets() method which can take the
   // android.view.WindowInsets.Type.ime() flag to find the keyboard inset.
-  @TargetApi(20)
-  @RequiresApi(20)
+
   private int guessBottomKeyboardInset(WindowInsets insets) {
     int screenHeight = getRootView().getHeight();
     // Magic number due to this being a heuristic. This should be replaced, but we have not
@@ -638,18 +666,17 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * wider than expected padding when the status and navigation bars are hidden.
    */
   @Override
-  @TargetApi(20)
-  @RequiresApi(20)
+
   // The annotations to suppress "InlinedApi" and "NewApi" lints prevent lint warnings
   // caused by usage of Android Q APIs. These calls are safe because they are
   // guarded.
-  @SuppressLint({"InlinedApi", "NewApi"})
+  @SuppressLint({"InlinedApi", "NewApi", "DeprecatedSinceApi"})
   @NonNull
   public final WindowInsets onApplyWindowInsets(@NonNull WindowInsets insets) {
     WindowInsets newInsets = super.onApplyWindowInsets(insets);
 
     // getSystemGestureInsets() was introduced in API 29 and immediately deprecated in 30.
-    if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+    if (Build.VERSION.SDK_INT == API_LEVELS.API_29) {
       Insets systemGestureInsets = insets.getSystemGestureInsets();
       viewportMetrics.systemGestureInsetTop = systemGestureInsets.top;
       viewportMetrics.systemGestureInsetRight = systemGestureInsets.right;
@@ -661,7 +688,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     boolean navigationBarVisible =
         (SYSTEM_UI_FLAG_HIDE_NAVIGATION & getWindowSystemUiVisibility()) == 0;
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_30) {
       int mask = 0;
       if (navigationBarVisible) {
         mask = mask | android.view.WindowInsets.Type.navigationBars();
@@ -742,6 +769,29 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       viewportMetrics.viewInsetLeft = 0;
     }
 
+    // Data from the DisplayCutout bounds. Cutouts for cameras and other sensors are
+    // populated here. DisplayCutout was introduced in API 28.
+    List<FlutterRenderer.DisplayFeature> displayCutouts = new ArrayList<>();
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
+      DisplayCutout cutout = insets.getDisplayCutout();
+      if (cutout != null) {
+        for (Rect bounds : cutout.getBoundingRects()) {
+          Log.v(TAG, "DisplayCutout area reported with bounds = " + bounds.toString());
+          displayCutouts.add(
+              new FlutterRenderer.DisplayFeature(
+                  bounds, DisplayFeatureType.CUTOUT, DisplayFeatureState.UNKNOWN));
+        }
+      }
+    }
+    viewportMetrics.setDisplayCutouts(displayCutouts);
+
+    // The caption bar inset is a new addition, and the APIs called to query it utilize a list of
+    // bounding Rects instead of an Insets object, which is a newer API method, as compared to the
+    // existing Insets-based method calls above.
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_35) {
+      delegate.growViewportMetricsToCaptionBar(getContext(), viewportMetrics);
+    }
+
     Log.v(
         TAG,
         "Updating window insets (onApplyWindowInsets()):\n"
@@ -768,55 +818,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
             + viewportMetrics.viewInsetBottom);
 
     sendViewportMetricsToFlutter();
-
     return newInsets;
-  }
-
-  /**
-   * Invoked when Android's desired window insets change, i.e., padding.
-   *
-   * <p>{@code fitSystemWindows} is an earlier version of {@link
-   * #onApplyWindowInsets(WindowInsets)}. See that method for more details about how window insets
-   * relate to Flutter.
-   */
-  @Override
-  @SuppressWarnings("deprecation")
-  protected boolean fitSystemWindows(@NonNull Rect insets) {
-    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT) {
-      // Status bar, left/right system insets partially obscure content (padding).
-      viewportMetrics.viewPaddingTop = insets.top;
-      viewportMetrics.viewPaddingRight = insets.right;
-      viewportMetrics.viewPaddingBottom = 0;
-      viewportMetrics.viewPaddingLeft = insets.left;
-
-      // Bottom system inset (keyboard) should adjust scrollable bottom edge (inset).
-      viewportMetrics.viewInsetTop = 0;
-      viewportMetrics.viewInsetRight = 0;
-      viewportMetrics.viewInsetBottom = insets.bottom;
-      viewportMetrics.viewInsetLeft = 0;
-
-      Log.v(
-          TAG,
-          "Updating window insets (fitSystemWindows()):\n"
-              + "Status bar insets: Top: "
-              + viewportMetrics.viewPaddingTop
-              + ", Left: "
-              + viewportMetrics.viewPaddingLeft
-              + ", Right: "
-              + viewportMetrics.viewPaddingRight
-              + "\n"
-              + "Keyboard insets: Bottom: "
-              + viewportMetrics.viewInsetBottom
-              + ", Left: "
-              + viewportMetrics.viewInsetLeft
-              + ", Right: "
-              + viewportMetrics.viewInsetRight);
-
-      sendViewportMetricsToFlutter();
-      return true;
-    } else {
-      return super.fitSystemWindows(insets);
-    }
   }
   // ------- End: Process View configuration that Flutter cares about. --------
 
@@ -871,7 +873,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * previous {@code keyCode} to generate a unicode combined character.
    */
   @Override
-  public boolean dispatchKeyEvent(KeyEvent event) {
+  public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
     if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
       // Tell Android to start tracking this event.
       getKeyDispatcherState().startTracking(event, this);
@@ -899,14 +901,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       return super.onTouchEvent(event);
     }
 
-    // TODO(abarth): This version check might not be effective in some
-    // versions of Android that statically compile code and will be upset
-    // at the lack of |requestUnbufferedDispatch|. Instead, we should factor
-    // version-dependent code into separate classes for each supported
-    // version and dispatch dynamically.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      requestUnbufferedDispatch(event);
-    }
+    requestUnbufferedDispatch(event);
 
     return androidTouchProcessor.onTouchEvent(event);
   }
@@ -921,7 +916,8 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   @Override
   public boolean onGenericMotionEvent(@NonNull MotionEvent event) {
     boolean handled =
-        isAttachedToFlutterEngine() && androidTouchProcessor.onGenericMotionEvent(event);
+        isAttachedToFlutterEngine()
+            && androidTouchProcessor.onGenericMotionEvent(event, getContext());
     return handled ? true : super.onGenericMotionEvent(event);
   }
 
@@ -980,8 +976,9 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * @return The view matching the accessibility id if any.
    */
   @SuppressLint("SoonBlockedPrivateApi")
+  @Nullable
   public View findViewByAccessibilityIdTraversal(int accessibilityId) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+    if (Build.VERSION.SDK_INT < API_LEVELS.API_29) {
       return findViewByAccessibilityIdRootedAtCurrentView(accessibilityId, this);
     }
     // Android Q or later doesn't call this method.
@@ -1013,7 +1010,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * @param currentView The root view.
    * @return A descendant of currentView or currentView itself.
    */
-  @SuppressLint("PrivateApi")
+  @SuppressLint("DiscouragedPrivateApi")
   private View findViewByAccessibilityIdRootedAtCurrentView(int accessibilityId, View currentView) {
     Method getAccessibilityViewIdMethod;
     try {
@@ -1057,13 +1054,32 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
 
   // -------- Start: Mouse -------
   @Override
-  @TargetApi(Build.VERSION_CODES.N)
-  @RequiresApi(Build.VERSION_CODES.N)
+  @TargetApi(API_LEVELS.API_24)
+  @RequiresApi(API_LEVELS.API_24)
   @NonNull
   public PointerIcon getSystemPointerIcon(int type) {
     return PointerIcon.getSystemIcon(getContext(), type);
   }
   // -------- End: Mouse ---------
+
+  // -------- Start: Keyboard -------
+
+  @Override
+  public BinaryMessenger getBinaryMessenger() {
+    return flutterEngine.getDartExecutor();
+  }
+
+  @Override
+  public boolean onTextInputKeyEvent(@NonNull KeyEvent keyEvent) {
+    return textInputPlugin.handleKeyEvent(keyEvent);
+  }
+
+  @Override
+  public void redispatch(@NonNull KeyEvent keyEvent) {
+    getRootView().dispatchKeyEvent(keyEvent);
+  }
+
+  // -------- End: Keyboard -------
 
   /**
    * Connects this {@code FlutterView} to the given {@link
@@ -1104,23 +1120,34 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
 
     // Initialize various components that know how to process Android View I/O
     // in a way that Flutter understands.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_24) {
       mouseCursorPlugin = new MouseCursorPlugin(this, this.flutterEngine.getMouseCursorChannel());
     }
+
     textInputPlugin =
         new TextInputPlugin(
             this,
             this.flutterEngine.getTextInputChannel(),
+            this.flutterEngine.getScribeChannel(),
             this.flutterEngine.getPlatformViewsController());
+
+    try {
+      textServicesManager =
+          (TextServicesManager)
+              getContext().getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
+      spellCheckPlugin =
+          new SpellCheckPlugin(textServicesManager, this.flutterEngine.getSpellCheckChannel());
+    } catch (Exception e) {
+      Log.e(TAG, "TextServicesManager not supported by device, spell check disabled.");
+    }
+
+    scribePlugin =
+        new ScribePlugin(
+            this, textInputPlugin.getInputMethodManager(), this.flutterEngine.getScribeChannel());
+
     localizationPlugin = this.flutterEngine.getLocalizationPlugin();
 
-    keyboardManager =
-        new KeyboardManager(
-            this,
-            textInputPlugin,
-            new KeyChannelResponder[] {
-              new KeyChannelResponder(flutterEngine.getKeyEventChannel())
-            });
+    keyboardManager = new KeyboardManager(this);
     androidTouchProcessor =
         new AndroidTouchProcessor(this.flutterEngine.getRenderer(), /*trackMotionEvents=*/ false);
     accessibilityBridge =
@@ -1149,7 +1176,13 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
 
     // Push View and Context related information from Android to Flutter.
     sendUserSettingsToFlutter();
-    localizationPlugin.sendLocalesToFlutter(getResources().getConfiguration());
+    getContext()
+        .getContentResolver()
+        .registerContentObserver(
+            Settings.System.getUriFor(Settings.System.TEXT_SHOW_PASSWORD),
+            false,
+            systemSettingsObserver);
+
     sendViewportMetricsToFlutter();
 
     flutterEngine.getPlatformViewsController().attachToView(this);
@@ -1190,6 +1223,8 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       listener.onFlutterEngineDetachedFromFlutterView();
     }
 
+    getContext().getContentResolver().unregisterContentObserver(systemSettingsObserver);
+
     flutterEngine.getPlatformViewsController().detachFromView();
 
     // Disconnect the FlutterEngine's PlatformViewsController from the AccessibilityBridge.
@@ -1206,6 +1241,9 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     textInputPlugin.getInputMethodManager().restartInput(this);
     textInputPlugin.destroy();
     keyboardManager.destroy();
+    if (spellCheckPlugin != null) {
+      spellCheckPlugin.destroy();
+    }
 
     if (mouseCursorPlugin != null) {
       mouseCursorPlugin.destroy();
@@ -1224,12 +1262,21 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     }
     renderSurface.detachFromRenderer();
 
-    if (flutterImageView != null) {
-      flutterImageView.closeImageReader();
-      flutterImageView = null;
-    }
+    releaseImageView();
+
     previousRenderSurface = null;
     flutterEngine = null;
+  }
+
+  private void releaseImageView() {
+    if (flutterImageView != null) {
+      flutterImageView.closeImageReader();
+      // Remove the FlutterImageView that was previously added by {@code convertToImageView} to
+      // avoid leaks when this FlutterView is reused later in the scenario where multiple
+      // FlutterActivity/FlutterFragment share one engine.
+      removeView(flutterImageView);
+      flutterImageView = null;
+    }
   }
 
   @VisibleForTesting
@@ -1237,6 +1284,11 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   public FlutterImageView createImageView() {
     return new FlutterImageView(
         getContext(), getWidth(), getHeight(), FlutterImageView.SurfaceKind.background);
+  }
+
+  @VisibleForTesting
+  public FlutterImageView getCurrentImageSurface() {
+    return flutterImageView;
   }
 
   /**
@@ -1278,20 +1330,18 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     }
     renderSurface = previousRenderSurface;
     previousRenderSurface = null;
-    if (flutterEngine == null) {
-      flutterImageView.detachFromRenderer();
-      onDone.run();
-      return;
-    }
+
     final FlutterRenderer renderer = flutterEngine.getRenderer();
-    if (renderer == null) {
+
+    if (flutterEngine == null || renderer == null) {
       flutterImageView.detachFromRenderer();
+      releaseImageView();
       onDone.run();
       return;
     }
-    // Start rendering on the previous surface.
+    // Resume rendering to the previous surface.
     // This surface is typically `FlutterSurfaceView` or `FlutterTextureView`.
-    renderSurface.attachToRenderer(renderer);
+    renderSurface.resume();
 
     // Install a Flutter UI listener to wait until the first frame is rendered
     // in the new surface to call the `onDone` callback.
@@ -1301,8 +1351,9 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
           public void onFlutterUiDisplayed() {
             renderer.removeIsDisplayingFlutterUiListener(this);
             onDone.run();
-            if (!(renderSurface instanceof FlutterImageView)) {
+            if (!(renderSurface instanceof FlutterImageView) && flutterImageView != null) {
               flutterImageView.detachFromRenderer();
+              releaseImageView();
             }
           }
 
@@ -1313,7 +1364,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         });
   }
 
-  public void attachOverlaySurfaceToRender(FlutterImageView view) {
+  public void attachOverlaySurfaceToRender(@NonNull FlutterImageView view) {
     if (flutterEngine != null) {
       view.attachToRenderer(flutterEngine.getRenderer());
     }
@@ -1386,13 +1437,49 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
             ? SettingsChannel.PlatformBrightness.dark
             : SettingsChannel.PlatformBrightness.light;
 
+    boolean isNativeSpellCheckServiceDefined = false;
+
+    if (textServicesManager != null) {
+      if (Build.VERSION.SDK_INT >= API_LEVELS.API_31) {
+        List<SpellCheckerInfo> enabledSpellCheckerInfos =
+            textServicesManager.getEnabledSpellCheckerInfos();
+        boolean gboardSpellCheckerEnabled =
+            enabledSpellCheckerInfos.stream()
+                .anyMatch(
+                    spellCheckerInfo ->
+                        spellCheckerInfo
+                            .getPackageName()
+                            .equals("com.google.android.inputmethod.latin"));
+
+        // Checks if enabled spell checker is the one that is suppported by Gboard, which is
+        // the one Flutter supports by default.
+        isNativeSpellCheckServiceDefined =
+            textServicesManager.isSpellCheckerEnabled() && gboardSpellCheckerEnabled;
+      } else {
+        isNativeSpellCheckServiceDefined = true;
+      }
+    }
+
     flutterEngine
         .getSettingsChannel()
         .startMessage()
         .setTextScaleFactor(getResources().getConfiguration().fontScale)
+        .setDisplayMetrics(getResources().getDisplayMetrics())
+        .setNativeSpellCheckServiceDefined(isNativeSpellCheckServiceDefined)
+        .setBrieflyShowPassword(
+            Settings.System.getInt(
+                    getContext().getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, 1)
+                == 1)
         .setUse24HourFormat(DateFormat.is24HourFormat(getContext()))
         .setPlatformBrightness(brightness)
         .send();
+  }
+
+  private FlutterViewDelegate delegate = new FlutterViewDelegate();
+
+  @VisibleForTesting
+  public void setDelegate(@NonNull FlutterViewDelegate delegate) {
+    this.delegate = delegate;
   }
 
   private void sendViewportMetricsToFlutter() {
@@ -1406,18 +1493,39 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
 
     viewportMetrics.devicePixelRatio = getResources().getDisplayMetrics().density;
     viewportMetrics.physicalTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+
     flutterEngine.getRenderer().setViewportMetrics(viewportMetrics);
   }
 
   @Override
-  public void onProvideAutofillVirtualStructure(ViewStructure structure, int flags) {
+  public void onProvideAutofillVirtualStructure(@NonNull ViewStructure structure, int flags) {
     super.onProvideAutofillVirtualStructure(structure, flags);
     textInputPlugin.onProvideAutofillVirtualStructure(structure, flags);
   }
 
   @Override
-  public void autofill(SparseArray<AutofillValue> values) {
+  public void autofill(@NonNull SparseArray<AutofillValue> values) {
     textInputPlugin.autofill(values);
+  }
+
+  @Override
+  public void setVisibility(int visibility) {
+    super.setVisibility(visibility);
+    // For `FlutterSurfaceView`, setting visibility to the current `FlutterView` will not take
+    // effect since it is not in the view tree. So override this method and set the surfaceView.
+    // See https://github.com/flutter/flutter/issues/105203
+    if (renderSurface instanceof FlutterSurfaceView) {
+      ((FlutterSurfaceView) renderSurface).setVisibility(visibility);
+    }
+  }
+
+  /**
+   * Allow access to the viewport metrics so that tests can set them to be valid with nonzero
+   * dimensions.
+   */
+  @VisibleForTesting
+  public FlutterRenderer.ViewportMetrics getViewportMetrics() {
+    return viewportMetrics;
   }
 
   /**

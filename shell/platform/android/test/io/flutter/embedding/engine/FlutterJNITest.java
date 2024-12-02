@@ -1,7 +1,15 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 package io.flutter.embedding.engine;
 
+import static io.flutter.Build.API_LEVELS;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,6 +19,7 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.os.LocaleList;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.embedding.engine.mutatorsstack.FlutterMutatorsStack;
 import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener;
@@ -22,12 +31,11 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 @Config(manifest = Config.NONE)
-@RunWith(RobolectricTestRunner.class)
-@TargetApi(24) // LocaleList and scriptCode are API 24+.
+@RunWith(AndroidJUnit4.class)
+@TargetApi(API_LEVELS.API_24) // LocaleList and scriptCode are API 24+.
 public class FlutterJNITest {
   @Test
   public void itAllowsFirstFrameListenersToRemoveThemselvesInline() {
@@ -149,7 +157,33 @@ public class FlutterJNITest {
     assertEquals(result[2], "");
   }
 
-  public void onDisplayPlatformView__callsPlatformViewsController() {
+  @Test
+  public void setAccessibilityIfAttached() {
+    // --- Test Setup ---
+    FlutterJNITester flutterJNI = new FlutterJNITester(true);
+    int expectedFlag = 100;
+
+    flutterJNI.setAccessibilityFeatures(expectedFlag);
+    assertEquals(flutterJNI.flags, expectedFlag);
+
+    flutterJNI.setSemanticsEnabled(true);
+    assertTrue(flutterJNI.semanticsEnabled);
+  }
+
+  @Test
+  public void doesNotSetAccessibilityIfNotAttached() {
+    // --- Test Setup ---
+    FlutterJNITester flutterJNI = new FlutterJNITester(false);
+    int flags = 100;
+
+    flutterJNI.setAccessibilityFeatures(flags);
+    assertEquals(flutterJNI.flags, 0);
+
+    flutterJNI.setSemanticsEnabled(true);
+    assertFalse(flutterJNI.semanticsEnabled);
+  }
+
+  public void onDisplayPlatformView_callsPlatformViewsController() {
     PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
 
     FlutterJNI flutterJNI = new FlutterJNI();
@@ -180,7 +214,7 @@ public class FlutterJNITest {
   }
 
   @Test
-  public void onDisplayOverlaySurface__callsPlatformViewsController() {
+  public void onDisplayOverlaySurface_callsPlatformViewsController() {
     PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
 
     FlutterJNI flutterJNI = new FlutterJNI();
@@ -196,7 +230,7 @@ public class FlutterJNITest {
   }
 
   @Test
-  public void onBeginFrame__callsPlatformViewsController() {
+  public void onBeginFrame_callsPlatformViewsController() {
     PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
 
     // --- Test Setup ---
@@ -211,7 +245,7 @@ public class FlutterJNITest {
   }
 
   @Test
-  public void onEndFrame__callsPlatformViewsController() {
+  public void onEndFrame_callsPlatformViewsController() {
     PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
 
     // --- Test Setup ---
@@ -226,7 +260,7 @@ public class FlutterJNITest {
   }
 
   @Test
-  public void createOverlaySurface__callsPlatformViewsController() {
+  public void createOverlaySurface_callsPlatformViewsController() {
     PlatformViewsController platformViewsController = mock(PlatformViewsController.class);
 
     FlutterJNI flutterJNI = new FlutterJNI();
@@ -240,9 +274,43 @@ public class FlutterJNITest {
   }
 
   @Test(expected = IllegalArgumentException.class)
-  public void invokePlatformMessageResponseCallback__wantsDirectBuffer() {
+  public void invokePlatformMessageResponseCallback_wantsDirectBuffer() {
     FlutterJNI flutterJNI = new FlutterJNI();
     ByteBuffer buffer = ByteBuffer.allocate(4);
     flutterJNI.invokePlatformMessageResponseCallback(0, buffer, buffer.position());
+  }
+
+  @Test
+  public void setRefreshRateFPS_callsUpdateRefreshRate() {
+    FlutterJNI flutterJNI = spy(new FlutterJNI());
+    // --- Execute Test ---
+    flutterJNI.setRefreshRateFPS(120.0f);
+    // --- Verify Results ---
+    verify(flutterJNI, times(1)).updateRefreshRate();
+  }
+
+  static class FlutterJNITester extends FlutterJNI {
+    FlutterJNITester(boolean attached) {
+      this.isAttached = attached;
+    }
+
+    final boolean isAttached;
+    boolean semanticsEnabled = false;
+    int flags = 0;
+
+    @Override
+    public boolean isAttached() {
+      return isAttached;
+    }
+
+    @Override
+    public void setSemanticsEnabledInNative(boolean enabled) {
+      semanticsEnabled = enabled;
+    }
+
+    @Override
+    public void setAccessibilityFeaturesInNative(int flags) {
+      this.flags = flags;
+    }
   }
 }

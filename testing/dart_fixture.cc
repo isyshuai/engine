@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "flutter/testing/dart_fixture.h"
+
+#include <utility>
 #include "flutter/fml/paths.h"
 
 namespace flutter::testing {
@@ -16,23 +18,24 @@ DartFixture::DartFixture(std::string kernel_filename,
                          std::string elf_filename,
                          std::string elf_split_filename)
     : native_resolver_(std::make_shared<TestDartNativeResolver>()),
-      split_aot_symbols_(
-          LoadELFSplitSymbolFromFixturesIfNeccessary(elf_split_filename)),
-      kernel_filename_(kernel_filename),
+      split_aot_symbols_(LoadELFSplitSymbolFromFixturesIfNeccessary(
+          std::move(elf_split_filename))),
+      kernel_filename_(std::move(kernel_filename)),
       assets_dir_(fml::OpenDirectory(GetFixturesPath(),
                                      false,
                                      fml::FilePermission::kRead)),
-      aot_symbols_(LoadELFSymbolFromFixturesIfNeccessary(elf_filename)) {}
+      aot_symbols_(
+          LoadELFSymbolFromFixturesIfNeccessary(std::move(elf_filename))) {}
 
 Settings DartFixture::CreateSettingsForFixture() {
   Settings settings;
   settings.leak_vm = false;
-  settings.task_observer_add = [](intptr_t, fml::closure) {};
+  settings.task_observer_add = [](intptr_t, const fml::closure&) {};
   settings.task_observer_remove = [](intptr_t) {};
   settings.isolate_create_callback = [this]() {
     native_resolver_->SetNativeResolverForIsolate();
   };
-  settings.enable_observatory = false;
+  settings.enable_vm_service = false;
   SetSnapshotsAndAssets(settings);
   return settings;
 }
@@ -49,10 +52,10 @@ void DartFixture::SetSnapshotsAndAssets(Settings& settings) {
   // snapshots will be present in the application AOT dylib.
   if (DartVM::IsRunningPrecompiledCode()) {
     FML_CHECK(PrepareSettingsForAOTWithSymbols(settings, aot_symbols_));
-#if OS_LINUX
+#if FML_OS_LINUX
     settings.vmservice_snapshot_library_path.emplace_back(fml::paths::JoinPaths(
         {GetTestingAssetsPath(), "libvmservice_snapshot.so"}));
-#endif  // OS_LINUX
+#endif  // FML_OS_LINUX
   } else {
     settings.application_kernels = [this]() -> Mappings {
       std::vector<std::unique_ptr<const fml::Mapping>> kernel_mappings;
@@ -69,9 +72,14 @@ void DartFixture::SetSnapshotsAndAssets(Settings& settings) {
   }
 }
 
-void DartFixture::AddNativeCallback(std::string name,
+void DartFixture::AddNativeCallback(const std::string& name,
                                     Dart_NativeFunction callback) {
-  native_resolver_->AddNativeCallback(std::move(name), callback);
+  native_resolver_->AddNativeCallback(name, callback);
+}
+
+void DartFixture::AddFfiNativeCallback(const std::string& name,
+                                       void* callback_ptr) {
+  native_resolver_->AddFfiNativeCallback(name, callback_ptr);
 }
 
 }  // namespace flutter::testing

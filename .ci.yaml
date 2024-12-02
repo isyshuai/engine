@@ -8,403 +8,579 @@
 enabled_branches:
   - main
   - flutter-\d+\.\d+-candidate\.\d+
+  - fuchsia_r\d+[a-z]*
 
 platform_properties:
   linux:
     properties:
-      build_host: "false"
-      build_fuchsia: "false"
-      build_android_debug: "false"
-      build_android_aot: "false"
-      build_android_vulkan: "false"
-      build_ios: "false"
-      build_windows_uwp: "false"
-      build_android_jit_release: "false"
-      gcs_goldens_bucket: ""
-      ios_debug: "false"
-      ios_profile: "false"
-      ios_release: "false"
-      no_bitcode: "false"
-      caches: >-
-        [
-          {"name":"builder_linux_engine","path":"builder"},
-          {"name":"gradle","path":"gradle"},
-          {"name":"openjdk","path":"java"}
-        ]
-      # CIPD flutter_internal/java/openjdk/$platform
+      # CIPD flutter/java/openjdk/$platform
       dependencies: >-
         [
-          {"dependency": "open_jdk", "version": "version:1.8.0u202-b08"},
-          {"dependency": "gradle_cache"}
+          {"dependency": "open_jdk", "version": "version:17"},
+          {"dependency": "gradle_cache", "version": "none"}
         ]
       device_type: none
-      os: Linux
+      os: Ubuntu
+      cores: "8"
   mac:
     properties:
-      build_host: "false"
-      build_fuchsia: "false"
-      build_android_debug: "false"
-      build_android_aot: "false"
-      build_android_vulkan: "false"
-      build_ios: "false"
-      build_windows_uwp: "false"
-      build_android_jit_release: "false"
-      gcs_goldens_bucket: ""
-      ios_debug: "false"
-      ios_profile: "false"
-      ios_release: "false"
-      no_bitcode: "false"
-      caches: >-
-        [
-          {"name":"flutter_cocoapods","path":"cocoapods"},
-          {"name":"old_osx_sdk","path":"osx_sdk"},
-          {"name":"builder_mac_engine","path":"builder"},
-          {"name":"openjdk","path":"java"}
-        ]
-      # CIPD flutter_internal/java/openjdk/$platform
+      # CIPD flutter/java/openjdk/$platform
       dependencies: >-
         [
-          {"dependency": "open_jdk", "version": "version:1.8.0u202-b08"}
+          {"dependency": "open_jdk", "version": "version:17"}
         ]
       device_type: none
-      mac_model: "Macmini8,1"
-      os: Mac-10.15
-      xcode: 12c33 # xcode 12.3
+      os: Mac-13|Mac-14
+      $flutter/osx_sdk : >-
+        {
+          "sdk_version": "15a240d"
+        }
   windows:
     properties:
-      build_host: "false"
-      build_fuchsia: "false"
-      build_android_debug: "false"
-      build_android_aot: "false"
-      build_android_vulkan: "false"
-      build_ios: "false"
-      build_windows_uwp: "false"
-      build_android_jit_release: "false"
-      gcs_goldens_bucket: ""
-      ios_debug: "false"
-      ios_profile: "false"
-      ios_release: "false"
-      no_bitcode: "false"
-      caches: >-
-        [
-          {"name":"builder_win_engine","path":"builder"},
-          {"name":"openjdk","path":"java"}
-        ]
-      # CIPD flutter_internal/java/openjdk/$platform
+      # CIPD flutter/java/openjdk/$platform
       dependencies: >-
         [
-          {"dependency": "open_jdk", "version": "version:1.8.0u202-b08"}
+          {"dependency": "open_jdk", "version": "version:17"}
         ]
       device_type: none
       os: Windows-10
 
 targets:
-  - name: Linux Android AOT Engine
-    recipe: engine
-    properties:
-      add_recipes_cq: "true"
-      build_android_aot: "true"
-      android_sdk_license: \n24333f8a63b6825ea9c5514f83c2829b004d1fee
-      android_sdk_preview_license: \n84831b9409646a918e30573bab4c9c91346d8abd
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Android Debug Engine
-    recipe: engine
-    properties:
-      add_recipes_cq: "true"
-      build_android_debug: "true"
-      build_android_jit_release: "true"
-      build_android_vulkan: "true"
-      android_sdk_license: \n24333f8a63b6825ea9c5514f83c2829b004d1fee
-      android_sdk_preview_license: \n84831b9409646a918e30573bab4c9c91346d8abd
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Android Scenarios
-    bringup: true # Recipe issue https://github.com/flutter/flutter/issues/86427
-    recipe: engine/scenarios
-    properties:
-      dependencies: >-
-        [
-          {"dependency": "android_virtual_device", "version": "31"}
-        ]
-      upload_packages: "true"
-      clobber: "true"
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Benchmarks
+  - name: Linux local_engine_builds
     enabled_branches:
       - main
-      - master
-    recipe: engine/engine_metrics
+    recipe: engine_v2/engine_v2
+    properties:
+      config_name: local_engine
+    # local_engine schedules a bunch of other builds, so it's likely to timeout waiting for those builds to run.
+    timeout: 180
+
+  - name: Linux linux_android_emulator_tests
+    bringup: true
+    enabled_branches:
+      - main
+    recipe: engine_v2/engine_v2
+    properties:
+      config_name: linux_android_emulator
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    timeout: 90
+    runIf:
+      - .ci.yaml
+      - ci/builders/linux_android_emulator.json
+      - DEPS
+      - lib/ui/**
+      - shell/platform/android/**
+      - testing/scenario_app/**
+      - testing/skia_gold_client/**
+
+  - name: Linux linux_android_emulator_tests_34
+    enabled_branches:
+      - main
+    recipe: engine_v2/engine_v2
+    properties:
+      config_name: linux_android_emulator_34
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    timeout: 90
+    runIf:
+      - .ci.yaml
+      - ci/builders/linux_android_emulator.json
+      - DEPS
+      - lib/ui/**
+      - shell/platform/android/**
+      - testing/scenario_app/**
+      - testing/skia_gold_client/**
+
+  - name: Linux linux_android_emulator_opengles_tests_34
+    enabled_branches:
+      - main
+    recipe: engine_v2/engine_v2
+    properties:
+      config_name: linux_android_emulator_opengles_34
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    timeout: 90
+    runIf:
+      - .ci.yaml
+      - ci/builders/linux_android_emulator_opengles_34.json
+      - DEPS
+      - lib/ui/**
+      - shell/platform/android/**
+      - testing/scenario_app/**
+      - testing/skia_gold_client/**
+
+  - name: Linux linux_android_emulator_skia_tests
+    bringup: true
+    enabled_branches:
+      - main
+    recipe: engine_v2/builder
+    properties:
+      config_name: linux_android_emulator_skia
+      kvm: "1"
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    timeout: 90
+    runIf:
+      - .ci.yaml
+      - ci/builders/linux_android_emulator.json
+      - DEPS
+      - lib/ui/**
+      - shell/platform/android/**
+      - testing/scenario_app/**
+      - testing/skia_gold_client/**
+
+  - name: Linux linux_android_emulator_skia_tests_34
+    enabled_branches:
+      - main
+    recipe: engine_v2/builder
+    properties:
+      config_name: linux_android_emulator_skia_34
+      kvm: "1"
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    timeout: 90
+    runIf:
+      - .ci.yaml
+      - ci/builders/linux_android_emulator.json
+      - DEPS
+      - lib/ui/**
+      - shell/platform/android/**
+      - testing/scenario_app/**
+      - testing/skia_gold_client/**
+
+  - name: Linux builder_cache
+    enabled_branches:
+      - main
+    recipe: engine_v2/cache
     presubmit: false
     properties:
-      build_host: "true"
-      upload_metrics: "true"
+      cache_name: "builder"
+      cache_paths: >-
+        [
+          "builder",
+          "git"
+        ]
+      gclient_variables: >-
+        {
+          "download_emsdk": "true",
+          "download_android_deps": "true",
+          "download_jdk": "true"
+        }
     timeout: 60
-    scheduler: luci
 
-  - name: Linux Benchmarks (no-upload)
-    recipe: engine/engine_metrics
-    properties:
-      build_host: "true"
-      upload_metrics: "false"
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Fuchsia
-    recipe: engine
-    properties:
-      add_recipes_cq: "true"
-      build_fuchsia: "true"
-      fuchsia_ctl_version: version:0.0.27
-    timeout: 90
-    scheduler: luci
-
-  - name: Linux Fuchsia FEMU
-    recipe: femu_test
-    properties:
-      add_recipes_cq: "true"
-      build_fuchsia: "true"
-      fuchsia_ctl_version: version:0.0.27
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Framework Smoke Tests
-    recipe: engine/framework_smoke
+  - name: Windows builder_cache
     enabled_branches:
       - main
-      - master
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Host Engine
-    recipe: engine
+    recipe: engine_v2/cache
+    presubmit: false
     properties:
-      add_recipes_cq: "true"
-      build_host: "true"
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Unopt
-    recipe: engine_unopt
-    properties:
-      add_recipes_cq: "true"
-    timeout: 60
-    scheduler: luci
-
-  - name: Linux Arm Host Engine
-    recipe: engine/engine_arm
-    properties:
-      add_recipes_cq: "true"
-      build_host: "true"
-    timeout: 90
-    scheduler: luci
-
-  - name: Linux Web Engine
-    recipe: web_engine
-    properties:
-      add_recipes_cq: "true"
-      gcs_goldens_bucket: flutter_logs
-      dependencies: >-
+      cache_name: "builder"
+      cache_paths: >-
         [
-          {"dependency": "goldctl"}
+          "builder",
+          "git"
         ]
+      gclient_variables: >-
+        {
+          "download_android_deps": "true",
+          "download_jdk": "true"
+        }
     timeout: 60
-    scheduler: luci
+
+  - name: Mac builder_cache
+    enabled_branches:
+      - main
+    recipe: engine_v2/cache
+    presubmit: false
+    properties:
+      cache_name: "builder"
+      cache_paths: >-
+        [
+          "builder",
+          "git"
+        ]
+      ignore_cache_paths: >-
+        [
+          "builder/src/flutter/prebuilts/SDKs",
+          "builder/src/flutter/prebuilts/Library"
+        ]
+      gclient_variables: >-
+        {
+          "download_android_deps": "true",
+          "download_jdk": "true"
+        }
+    timeout: 60
+
+  - name: Linux linux_benchmarks
+    enabled_branches:
+      - main
+    recipe: engine_v2/builder
+    presubmit: false
+    properties:
+      config_name: linux_benchmarks
+    timeout: 60
+
+  - name: Linux linux_fuchsia
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      release_build: "true"
+      config_name: linux_fuchsia
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_fuchsia_tests
+    recipe: engine_v2/engine_v2
+    timeout: 90
+    properties:
+      config_name: linux_fuchsia_tests
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      kvm: "1"
+
+  - name: Linux linux_clang_tidy
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      config_name: linux_clang_tidy
     runIf:
       - DEPS
+      - .ci.yaml
+      - tools/clang_tidy/**
+      - ci/builders/**
+      - ci/clang_tidy.sh
+      - "**.h"
+      - "**.c"
+      - "**.cc"
+      - "**.fbs"
+      - "**.frag"
+      - "**.vert"
+
+  - name: Linux linux_arm_host_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      release_build: "true"
+      config_name: linux_arm_host_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_host_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      release_build: "true"
+      config_name: linux_host_engine
+      dependencies: >-
+        [
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
+        ]
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_host_desktop_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      release_build: "true"
+      config_name: linux_host_desktop_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_android_aot_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      release_build: "true"
+      config_name: linux_android_aot_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_android_debug_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      release_build: "true"
+      config_name: linux_android_debug_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+
+  - name: Linux linux_license
+    recipe: engine_v2/builder
+    timeout: 120
+    properties:
+      add_recipes_cq: "true"
+      config_name: linux_license
+      clobber: "true"
+
+  - name: Linux linux_web_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      release_build: "true"
+      config_name: linux_web_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
+    runIf:
+      - DEPS
+      - .ci.yaml
       - lib/web_ui/**
       - web_sdk/**
       - tools/**
       - ci/**
       - flutter_frontend_server/**
+
+  - name: Linux clangd
+    recipe: engine_v2/builder
+    properties:
+      config_name: linux_clangd
+
+  - name: Linux linux_unopt
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      config_name: linux_unopt
 
   - name: Linux Web Framework tests
     recipe: engine/web_engine_framework
     enabled_branches:
       - main
-      - master
     properties:
       add_recipes_cq: "true"
-      framework: "true"
+      cores: "32"
+      gclient_variables: >-
+        {"download_emsdk": true}
+      dependencies: >-
+        [
+          {"dependency": "chrome_and_driver", "version": "version:119.0.6045.9"},
+          {"dependency": "curl", "version": "version:7.64.0"}
+        ]
+      no_goma: "true"
+      drone_dimensions: >
+        ["device_type=none", "os=Linux"]
       shard: web_tests
       subshards: >-
               ["0", "1", "2", "3", "4", "5", "6", "7_last"]
-    timeout: 60
-    scheduler: luci
+    timeout: 120
     runIf:
       - DEPS
+      - .ci.yaml
       - lib/web_ui/**
       - web_sdk/**
       - tools/**
       - ci/**
       - flutter_frontend_server/**
 
-  - name: Mac Android AOT Engine
-    recipe: engine
-    properties:
-      android_sdk_license: \n24333f8a63b6825ea9c5514f83c2829b004d1fee
-      android_sdk_preview_license: \n84831b9409646a918e30573bab4c9c91346d8abd
-      build_android_aot: "true"
-      jazzy_version: 0.9.5
-    timeout: 60
-    scheduler: luci
-
-  - name: Mac Host Engine
-    recipe: engine
+  - name: Linux mac_android_aot_engine
+    recipe: engine_v2/engine_v2
+    timeout: 240
     properties:
       add_recipes_cq: "true"
-      build_host: "true"
-      jazzy_version: 0.9.5
-    timeout: 75
-    scheduler: luci
+      release_build: "true"
+      config_name: mac_android_aot_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Linux
+    dimensions:
+      # This is needed so that orchestrators that only spawn subbuilds are not
+      # assigned to the large 32 core workers when doing release builds.
+      # For more details see the issue
+      # at https://github.com/flutter/flutter/issues/152186.
+      cores: "8"
 
-  - name: Mac Unopt
-    recipe: engine_unopt
+  - name: Mac mac_clang_tidy
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    properties:
+      config_name: mac_clang_tidy
+    runIf:
+      - DEPS
+      - .ci.yaml
+      - tools/clang_tidy/**
+      - ci/builders/**
+      - ci/clang_tidy.sh
+      - "**.h"
+      - "**.c"
+      - "**.cc"
+      - "**.fbs"
+      - "**.frag"
+      - "**.vert"
+      - "**.m"
+      - "**.mm"
+
+  - name: Mac mac_host_engine
+    recipe: engine_v2/engine_v2
+    timeout: 240
     properties:
       add_recipes_cq: "true"
-      jazzy_version: 0.9.5
-    timeout: 75
-    scheduler: luci
-
-  - name: Mac iOS Engine
-    recipe: engine
-    properties:
-      build_ios: "true"
-      ios_debug: "true"
-      jazzy_version: 0.9.5
-    timeout: 60
-    scheduler: luci
-
-  - name: Mac Web Engine
-    recipe: web_engine
-    properties:
-      gcs_goldens_bucket: flutter_logs
+      release_build: "true"
+      cpu: arm64
+      config_name: mac_host_engine
       dependencies: >-
         [
-          {"dependency": "goldctl"}
+          {"dependency": "goldctl", "version": "git_revision:720a542f6fe4f92922c3b8f0fdcc4d2ac6bb83cd"}
         ]
-    timeout: 60
-    scheduler: luci
-    runIf:
-      - DEPS
-      - lib/web_ui/**
-      - web_sdk/**
-      - tools/**
-      - ci/**
-      - flutter_frontend_server/**
+      $flutter/osx_sdk : >-
+        {
+          "sdk_version": "15a240d"
+        }
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Mac-13|Mac-14
+
+  - name: Mac clangd
+    recipe: engine_v2/builder
+    properties:
+      config_name: mac_clangd
+      cpu: arm64
+
+  - name: Mac mac_unopt
+    recipe: engine_v2/engine_v2
+    properties:
+      config_name: mac_unopt
+      add_recipes_cq: "true"
+      # Retry for flakes caused by https://github.com/flutter/flutter/issues/157636
+      presubmit_max_attempts: "2"
+    timeout: 120
 
   - name: Mac mac_ios_engine
     recipe: engine_v2/engine_v2
-    bringup: true
-    timeout: 60
-    properties:
-      config_name: mac_ios_engine
-      environment: Staging
-    scheduler: luci
-
-  - name:  Mac mac_ios_engine_profile
-    recipe: engine_v2/engine_v2
-    bringup: true
-    timeout: 60
-    properties:
-      config_name: mac_ios_engine_profile
-      environment: Staging
-    scheduler: luci
-
-  - name:  Mac mac_ios_engine_release
-    recipe: engine_v2/engine_v2
-    bringup: true
-    timeout: 60
-    properties:
-      config_name: mac_ios_engine_release
-      environment: Staging
-    scheduler: luci
-
-  - name: Windows Android AOT Engine
-    recipe: engine
-    properties:
-      build_android_aot: "true"
-      android_sdk_license: \n24333f8a63b6825ea9c5514f83c2829b004d1fee
-      android_sdk_preview_license: \n84831b9409646a918e30573bab4c9c91346d8abd
-    timeout: 60
-    scheduler: luci
-
-  - name: Windows Host Engine
-    recipe: engine
-    timeout: 60
+    timeout: 240
     properties:
       add_recipes_cq: "true"
-      build_host: "true"
-    scheduler: luci
+      release_build: "true"
+      config_name: mac_ios_engine
+      $flutter/osx_sdk : >-
+        {
+          "sdk_version": "15a240d"
+        }
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Mac-13|Mac-14
+      - cpu=x86
 
   - name: Windows windows_android_aot_engine
     recipe: engine_v2/engine_v2
-    bringup: true
-    timeout: 60
+    timeout: 120
     properties:
+      add_recipes_cq: "true"
+      release_build: "true"
       config_name: windows_android_aot_engine
-      environment: Staging
-    scheduler: luci
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Windows
 
   - name: Windows windows_host_engine
     recipe: engine_v2/engine_v2
-    bringup: true
-    timeout: 60
-    properties:
-      config_name: windows_host_engine
-      environment: Staging
-    scheduler: luci
-
-  - name: Windows Unopt
-    recipe: engine_unopt
+    timeout: 120
     properties:
       add_recipes_cq: "true"
-    timeout: 75
-    scheduler: luci
+      release_build: "true"
+      config_name: windows_host_engine
+    # Do not remove(https://github.com/flutter/flutter/issues/144644)
+    # Scheduler will fail to get the platform
+    drone_dimensions:
+      - os=Windows
 
-  - name: Windows UWP Engine
-    recipe: engine
+  - name: Windows windows_arm_host_engine
+    recipe: engine_v2/engine_v2
+    timeout: 120
+    enabled_branches:
+      # Don't run this on release branches
+      - main
     properties:
-      build_windows_uwp: "true"
-    timeout: 60
-    scheduler: luci
+      add_recipes_cq: "true"
+      config_name: windows_arm_host_engine
+    drone_dimensions:
+      - os=Windows
 
-  - name: Windows Web Engine
-    recipe: web_engine
+  - name: Windows windows_unopt
+    recipe: engine_v2/builder
+    timeout: 120
     properties:
-      gcs_goldens_bucket: flutter_logs
-    timeout: 60
-    scheduler: luci
-    runIf:
-      - DEPS
-      - lib/web_ui/**
-      - web_sdk/**
-
-  - name: Mac iOS Engine Profile
-    presubmit: false
-    recipe: engine
-    properties:
-      build_ios: "true"
-      ios_profile: "true"
-      jazzy_version: 0.9.5
-    timeout: 90
-    scheduler: luci
-
-  - name: Mac iOS Engine Release
-    presubmit: false
-    recipe: engine
-    properties:
-      build_ios: "true"
-      ios_release: "true"
-      jazzy_version: 0.9.5
-    timeout: 90
-    scheduler: luci
+      config_name: windows_unopt
 
   - name: Linux ci_yaml engine roller
     bringup: true
     recipe: infra/ci_yaml
-    scheduler: luci
+    properties:
+      backfill: "false"

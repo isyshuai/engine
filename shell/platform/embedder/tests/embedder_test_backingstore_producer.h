@@ -6,57 +6,47 @@
 #define FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_BACKINGSTORE_PRODUCER_H_
 
 #include <memory>
+
 #include "flutter/fml/macros.h"
+#include "flutter/fml/memory/ref_ptr_internal.h"
 #include "flutter/shell/platform/embedder/embedder.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 
-#ifdef SHELL_ENABLE_METAL
-#include "flutter/testing/test_metal_context.h"
-#endif
-
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
 
 class EmbedderTestBackingStoreProducer {
  public:
   enum class RenderTargetType {
     kSoftwareBuffer,
+    kSoftwareBuffer2,
     kOpenGLFramebuffer,
     kOpenGLTexture,
+    kOpenGLSurface,
     kMetalTexture,
+    kVulkanImage,
   };
 
   EmbedderTestBackingStoreProducer(sk_sp<GrDirectContext> context,
                                    RenderTargetType type);
-  ~EmbedderTestBackingStoreProducer();
+  virtual ~EmbedderTestBackingStoreProducer();
 
-  bool Create(const FlutterBackingStoreConfig* config,
-              FlutterBackingStore* renderer_out);
+  virtual bool Create(const FlutterBackingStoreConfig* config,
+                      FlutterBackingStore* backing_store_out) = 0;
 
- private:
-  bool CreateFramebuffer(const FlutterBackingStoreConfig* config,
-                         FlutterBackingStore* renderer_out);
+  virtual sk_sp<SkSurface> GetSurface(
+      const FlutterBackingStore* backing_store) const = 0;
 
-  bool CreateTexture(const FlutterBackingStoreConfig* config,
-                     FlutterBackingStore* renderer_out);
+  virtual sk_sp<SkImage> MakeImageSnapshot(
+      const FlutterBackingStore* backing_store) const = 0;
 
-  bool CreateSoftware(const FlutterBackingStoreConfig* config,
-                      FlutterBackingStore* backing_store_out);
-
-  bool CreateMTLTexture(const FlutterBackingStoreConfig* config,
-                        FlutterBackingStore* renderer_out);
-
+ protected:
   sk_sp<GrDirectContext> context_;
   RenderTargetType type_;
-
-#ifdef SHELL_ENABLE_METAL
-  std::unique_ptr<TestMetalContext> test_metal_context_;
-#endif
 
   FML_DISALLOW_COPY_AND_ASSIGN(EmbedderTestBackingStoreProducer);
 };
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing
 
 #endif  // FLUTTER_SHELL_PLATFORM_EMBEDDER_TESTS_EMBEDDER_TEST_BACKINGSTORE_PRODUCER_H_

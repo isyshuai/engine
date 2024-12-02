@@ -8,9 +8,9 @@ import 'dart:io' as io;
 import 'package:http/http.dart';
 import 'package:path/path.dart' as path;
 
-import 'browser_lock.dart';
 import 'common.dart';
 import 'environment.dart';
+import 'package_lock.dart';
 
 /// Returns the installation of Edge.
 ///
@@ -70,6 +70,8 @@ Future<BrowserInstallation> getEdgeInstallation(
 ///
 /// See: https://github.com/MicrosoftEdge/edge-launcher
 class EdgeLauncher {
+  EdgeLauncher();
+
   /// Path to the directory that contains `MicrosoftEdgeLauncher.exe`.
   io.Directory get launcherInstallationDir => io.Directory(
         path.join(environment.webUiDartToolDir.path, 'microsoftedgelauncher',
@@ -82,15 +84,13 @@ class EdgeLauncher {
   bool get isInstalled => executable.existsSync();
 
   /// Version number launcher executable  `MicrosoftEdgeLauncher`.
-  String get version => browserLock.edgeLock.launcherVersion;
+  String get version => packageLock.edgeLock.launcherVersion;
 
   /// Url for downloading  `MicrosoftEdgeLauncher`.
   ///
   /// Only useful in Windows, hence not added to [PlatformBinding].
   String get windowsEdgeLauncherDownloadUrl =>
       'https://github.com/MicrosoftEdge/edge-launcher/releases/download/$version/MicrosoftEdgeLauncher.exe';
-
-  EdgeLauncher();
 
   /// Install the launcher if it does not exist in this system.
   Future<void> install() async {

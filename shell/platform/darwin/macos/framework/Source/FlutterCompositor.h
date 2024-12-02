@@ -2,99 +2,130 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_COMPOSITOR_H_
-#define FLUTTER_COMPOSITOR_H_
+#ifndef FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERCOMPOSITOR_H_
+#define FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERCOMPOSITOR_H_
 
 #include <functional>
 #include <list>
+#include <unordered_map>
+#include <variant>
 
 #include "flutter/fml/macros.h"
-#include "flutter/shell/platform/darwin/macos/framework/Source/FlutterViewController_Internal.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMutatorView.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterPlatformViewController.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterTimeConverter.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterViewProvider.h"
 #include "flutter/shell/platform/embedder/embedder.h"
 
+@class FlutterMutatorView;
+@class FlutterCursorCoordinator;
+
 namespace flutter {
+
+struct BackingStoreLayer {
+  std::vector<FlutterRect> paint_region;
+};
+
+using LayerVariant = std::variant<PlatformViewLayer, BackingStoreLayer>;
 
 // FlutterCompositor creates and manages the backing stores used for
 // rendering Flutter content and presents Flutter content and Platform views.
 // Platform views are not yet supported.
+//
+// TODO(cbracken): refactor for testability. https://github.com/flutter/flutter/issues/137648
 class FlutterCompositor {
  public:
-  explicit FlutterCompositor(FlutterViewController* view_controller);
-
-  virtual ~FlutterCompositor() = default;
-
-  // Creates a BackingStore and saves updates the backing_store_out
-  // data with the new BackingStore data.
-  // If the backing store is being requested for the first time
-  // for a given frame, this compositor does not create a new backing
-  // store but rather returns the backing store associated with the
-  // FlutterView's FlutterSurfaceManager.
+  // Create a FlutterCompositor with a view provider.
   //
-  // Any additional state allocated for the backing store and
-  // saved as user_data in the backing store must be collected
-  // in the backing_store's destruction_callback field which will
-  // be called when the embedder collects the backing store.
-  virtual bool CreateBackingStore(const FlutterBackingStoreConfig* config,
-                                  FlutterBackingStore* backing_store_out) = 0;
+  // The view_provider is used to query FlutterViews from view IDs,
+  // which are used for presenting and creating backing stores.
+  // It must not be null, and is typically FlutterViewEngineProvider.
+  FlutterCompositor(id<FlutterViewProvider> view_provider,
+                    FlutterTimeConverter* time_converter,
+                    FlutterPlatformViewController* platform_views_controller);
 
-  // Releases the memory for any state used by the backing store.
-  virtual bool CollectBackingStore(
-      const FlutterBackingStore* backing_store) = 0;
+  ~FlutterCompositor() = default;
 
-  // Presents the FlutterLayers by updating FlutterView(s) using the
-  // layer content.
-  // Present sets frame_started_ to false.
-  virtual bool Present(const FlutterLayer** layers, size_t layers_count) = 0;
+  // Allocate the resources for displaying a view.
+  //
+  // This method must be called when a view is added to FlutterEngine, and must be
+  // called on the main dispatch queue, or an assertion will be thrown.
+  void AddView(FlutterViewId view_id);
 
-  using PresentCallback = std::function<bool(bool has_flutter_content)>;
+  // Deallocate the resources for displaying a view.
+  //
+  // This method must be called when a view is removed from FlutterEngine, and
+  // must be called on the main dispatch queue, or an assertion will be thrown.
+  void RemoveView(FlutterViewId view_id);
 
-  // PresentCallback is called at the end of the Present function.
-  void SetPresentCallback(const PresentCallback& present_callback);
+  // Creates a backing store and saves updates the backing_store_out data with
+  // the new FlutterBackingStore data.
+  //
+  // If the backing store is being requested for the first time for a given
+  // frame, this compositor does not create a new backing store but rather
+  // returns the backing store associated with the FlutterView's
+  // FlutterSurfaceManager.
+  //
+  // Any additional state allocated for the backing store and saved as
+  // user_data in the backing store must be collected in the backing_store's
+  // destruction_callback field which will be called when the embedder collects
+  // the backing store.
+  bool CreateBackingStore(const FlutterBackingStoreConfig* config,
+                          FlutterBackingStore* backing_store_out);
 
-  // Denotes the current status of the frame being composited.
-  // Started: A new frame has begun and we have cleared the old layer tree
-  //          and are now creating backingstore(s) for the embedder to use.
-  // Presenting: the embedder has finished rendering into the provided
-  //             backingstore(s) and we are creating the layer tree for the
-  //             system compositor to present with.
-  // Ended: The frame has been presented and we are no longer processing
-  //        it.
-  typedef enum { kStarted, kPresenting, kEnded } FrameStatus;
+  // Presents the FlutterLayers by updating the FlutterView specified by
+  // `view_id` using the layer content.
+  bool Present(FlutterViewIdentifier view_id, const FlutterLayer** layers, size_t layers_count);
 
- protected:
-  __weak const FlutterViewController* view_controller_;
-
-  // Gets and sets the FrameStatus for the current frame.
-  void SetFrameStatus(FrameStatus frame_status);
-  FrameStatus GetFrameStatus();
-
-  // Clears the previous CALayers and updates the frame status to frame started.
-  void StartFrame();
-
-  // Calls the present callback and ensures the frame status is updated
-  // to frame ended, returning whether the present was successful or not.
-  bool EndFrame(bool has_flutter_content);
-
-  // Creates a CALayer object which is backed by the supplied IOSurface, and
-  // adds it to the root CALayer for this FlutterViewController's view.
-  void InsertCALayerForIOSurface(
-      const IOSurfaceRef& io_surface,
-      CATransform3D transform = CATransform3DIdentity);
+  // The number of views that the FlutterCompositor is keeping track of.
+  //
+  // This method must only be used in unit tests.
+  size_t DebugNumViews();
 
  private:
-  // A list of the active CALayer objects for the frame that need to be removed.
-  std::list<CALayer*> active_ca_layers_;
+  // A class that contains the information for a view to be presented.
+  class ViewPresenter {
+   public:
+    ViewPresenter();
 
-  // Callback set by the embedder to be called when the layer tree has been
-  // correctly set up for this frame.
-  PresentCallback present_callback_;
+    void PresentPlatformViews(FlutterView* default_base_view,
+                              const std::vector<LayerVariant>& layers,
+                              const FlutterPlatformViewController* platform_views_controller);
 
-  // Current frame status.
-  FrameStatus frame_status_ = kEnded;
+   private:
+    // Platform view to FlutterMutatorView that contains it.
+    NSMapTable<NSView*, FlutterMutatorView*>* mutator_views_;
+
+    // Coordinates mouse cursor changes between platform views and overlays.
+    FlutterCursorCoordinator* cursor_coordinator_;
+
+    // Presents the platform view layer represented by `layer`. `layer_index` is
+    // used to position the layer in the z-axis. If the layer does not have a
+    // superview, it will become subview of `default_base_view`.
+    FlutterMutatorView* PresentPlatformView(
+        FlutterView* default_base_view,
+        const PlatformViewLayer& layer,
+        size_t layer_position,
+        const FlutterPlatformViewController* platform_views_controller);
+
+    FML_DISALLOW_COPY_AND_ASSIGN(ViewPresenter);
+  };
+
+  // Where the compositor can query FlutterViews. Must not be null.
+  id<FlutterViewProvider> const view_provider_;
+
+  // Converts between engine time and core animation media time.
+  FlutterTimeConverter* const time_converter_;
+
+  // The controller used to manage creation and deletion of platform views.
+  const FlutterPlatformViewController* platform_view_controller_;
+
+  // The view presenters for views. Each key is a view ID.
+  std::unordered_map<FlutterViewId, ViewPresenter> presenters_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(FlutterCompositor);
 };
 
 }  // namespace flutter
 
-#endif  // FLUTTER_COMPOSITOR_H_
+#endif  // FLUTTER_SHELL_PLATFORM_DARWIN_MACOS_FRAMEWORK_SOURCE_FLUTTERCOMPOSITOR_H_

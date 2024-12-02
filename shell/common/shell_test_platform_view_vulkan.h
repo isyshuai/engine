@@ -10,14 +10,17 @@
 #include "flutter/shell/gpu/gpu_surface_vulkan_delegate.h"
 #include "flutter/vulkan/vulkan_application.h"
 #include "flutter/vulkan/vulkan_device.h"
+#include "flutter/vulkan/vulkan_skia_proc_table.h"
+#include "third_party/skia/include/gpu/vk/VulkanBackendContext.h"
+#include "third_party/skia/include/gpu/vk/VulkanMemoryAllocator.h"
+#include "third_party/skia/include/gpu/vk/VulkanTypes.h"
 
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
 
 class ShellTestPlatformViewVulkan : public ShellTestPlatformView {
  public:
   ShellTestPlatformViewVulkan(PlatformView::Delegate& delegate,
-                              TaskRunners task_runners,
+                              const TaskRunners& task_runners,
                               std::shared_ptr<ShellTestVsyncClock> vsync_clock,
                               CreateVsyncWaiter create_vsync_waiter,
                               std::shared_ptr<ShellTestExternalViewEmbedder>
@@ -42,22 +45,25 @@ class ShellTestPlatformViewVulkan : public ShellTestPlatformView {
     // |Surface|
     std::unique_ptr<SurfaceFrame> AcquireFrame(const SkISize& size) override;
 
+    // |Surface|
     SkMatrix GetRootTransformation() const override;
 
     // |Surface|
     GrDirectContext* GetContext() override;
 
    private:
-    bool valid_;
+    bool valid_ = false;
     fml::RefPtr<vulkan::VulkanProcTable> vk_;
     std::shared_ptr<ShellTestExternalViewEmbedder>
         shell_test_external_view_embedder_;
     std::unique_ptr<vulkan::VulkanApplication> application_;
     std::unique_ptr<vulkan::VulkanDevice> logical_device_;
+    sk_sp<skgpu::VulkanMemoryAllocator> memory_allocator_;
     sk_sp<GrDirectContext> context_;
 
     bool CreateSkiaGrContext();
-    bool CreateSkiaBackendContext(GrVkBackendContext* context);
+    bool CreateSkiaBackendContext(skgpu::VulkanBackendContext*,
+                                  VkPhysicalDeviceFeatures*);
 
     FML_DISALLOW_COPY_AND_ASSIGN(OffScreenSurface);
   };
@@ -86,7 +92,6 @@ class ShellTestPlatformViewVulkan : public ShellTestPlatformView {
   FML_DISALLOW_COPY_AND_ASSIGN(ShellTestPlatformViewVulkan);
 };
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing
 
 #endif  // FLUTTER_SHELL_COMMON_SHELL_TEST_PLATFORM_VIEW_VULKAN_H_

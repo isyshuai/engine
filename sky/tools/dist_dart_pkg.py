@@ -27,5 +27,6 @@ def main():
   # Do not copy this into the release output.
   shutil.copytree(args.source, args.dest, ignore=shutil.ignore_patterns('packages'))
 
+
 if __name__ == '__main__':
   sys.exit(main())

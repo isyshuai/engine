@@ -4,10 +4,13 @@
 
 import 'package:ui/ui.dart' as ui;
 
+import 'initialization.dart';
+
 const bool _debugLogPointerConverter = false;
 
-class _PointerState {
-  _PointerState(this.x, this.y);
+/// The state of the pointer of a specific device (e.g. finger, mouse).
+class _PointerDeviceState {
+  _PointerDeviceState(this.x, this.y);
 
   /// The identifier used in framework hit test.
   int? get pointer => _pointer;
@@ -20,6 +23,43 @@ class _PointerState {
 
   double x;
   double y;
+}
+
+class _GlobalPointerState {
+  _GlobalPointerState() {
+    assert(() {
+      registerHotRestartListener(reset);
+      return true;
+    }());
+  }
+
+  // Map from browser pointer identifiers to PointerEvent pointer identifiers.
+  final Map<int, _PointerDeviceState> pointers = <int, _PointerDeviceState>{};
+
+  /// This field is used to keep track of button state.
+  ///
+  /// To normalize pointer events, when we receive pointer down followed by
+  /// pointer up, we synthesize a move event. To make sure that button state
+  /// is correct for move regardless of button state at the time of up event
+  /// we store it on down,hover and move events.
+  int activeButtons = 0;
+
+  _PointerDeviceState ensurePointerDeviceState(int device, double x, double y) {
+    return pointers.putIfAbsent(
+      device,
+      () => _PointerDeviceState(x, y),
+    );
+  }
+
+  /// Resets all pointer states.
+  ///
+  /// This method is invoked during hot reload to make sure we have a clean
+  /// converter after hot reload.
+  void reset() {
+    pointers.clear();
+    _PointerDeviceState._pointerCount = 0;
+    activeButtons = 0;
+  }
 }
 
 /// Converter to convert web pointer data into a form that framework can
@@ -44,35 +84,14 @@ class _PointerState {
 class PointerDataConverter {
   PointerDataConverter();
 
-  // Map from browser pointer identifiers to PointerEvent pointer identifiers.
-  final Map<int, _PointerState> _pointers = <int, _PointerState>{};
-
-  /// This field is used to keep track of button state.
-  ///
-  /// To normalize pointer events, when we receive pointer down followed by
-  /// pointer up, we synthesize a move event. To make sure that button state
-  /// is correct for move regardless of button state at the time of up event
-  /// we store it on down,hover and move events.
-  int _activeButtons = 0;
-
-  /// Clears the existing pointer states.
-  ///
-  /// This method is invoked during hot reload to make sure we have a clean
-  /// converter after hot reload.
-  void clearPointerState() {
-    _pointers.clear();
-    _PointerState._pointerCount = 0;
-    _activeButtons = 0;
-  }
-
-  _PointerState _ensureStateForPointer(int device, double x, double y) {
-    return _pointers.putIfAbsent(
-      device,
-      () => _PointerState(x, y),
-    );
-  }
+  // This is made static because the state of pointer devices is global. This
+  // matches how the framework currently handles the state of pointer devices.
+  //
+  // See: https://github.com/flutter/flutter/blob/023e5addaa6e8e294a200cf754afaa1656f14aa6/packages/flutter/lib/src/rendering/binding.dart#L47-L47
+  static final _GlobalPointerState globalPointerState = _GlobalPointerState();
 
   ui.PointerData _generateCompletePointerData({
+    required int viewId,
     required Duration timeStamp,
     required ui.PointerChange change,
     required ui.PointerDeviceKind kind,
@@ -97,14 +116,17 @@ class PointerDataConverter {
     required int platformData,
     required double scrollDeltaX,
     required double scrollDeltaY,
+    required double scale,
+    ui.PointerDataRespondCallback? onRespond,
   }) {
-    assert(_pointers.containsKey(device));
-    final _PointerState state = _pointers[device]!;
+    assert(globalPointerState.pointers.containsKey(device));
+    final _PointerDeviceState state = globalPointerState.pointers[device]!;
     final double deltaX = physicalX - state.x;
     final double deltaY = physicalY - state.y;
     state.x = physicalX;
     state.y = physicalY;
     return ui.PointerData(
+      viewId: viewId,
       timeStamp: timeStamp,
       change: change,
       kind: kind,
@@ -132,16 +154,19 @@ class PointerDataConverter {
       platformData: platformData,
       scrollDeltaX: scrollDeltaX,
       scrollDeltaY: scrollDeltaY,
+      scale: scale,
+      onRespond: onRespond,
     );
   }
 
   bool _locationHasChanged(int device, double physicalX, double physicalY) {
-    assert(_pointers.containsKey(device));
-    final _PointerState state = _pointers[device]!;
+    assert(globalPointerState.pointers.containsKey(device));
+    final _PointerDeviceState state = globalPointerState.pointers[device]!;
     return state.x != physicalX || state.y != physicalY;
   }
 
   ui.PointerData _synthesizePointerData({
+    required int viewId,
     required Duration timeStamp,
     required ui.PointerChange change,
     required ui.PointerDeviceKind kind,
@@ -165,14 +190,16 @@ class PointerDataConverter {
     required int platformData,
     required double scrollDeltaX,
     required double scrollDeltaY,
+    required double scale,
   }) {
-    assert(_pointers.containsKey(device));
-    final _PointerState state = _pointers[device]!;
+    assert(globalPointerState.pointers.containsKey(device));
+    final _PointerDeviceState state = globalPointerState.pointers[device]!;
     final double deltaX = physicalX - state.x;
     final double deltaY = physicalY - state.y;
     state.x = physicalX;
     state.y = physicalY;
     return ui.PointerData(
+      viewId: viewId,
       timeStamp: timeStamp,
       change: change,
       kind: kind,
@@ -204,6 +231,7 @@ class PointerDataConverter {
       platformData: platformData,
       scrollDeltaX: scrollDeltaX,
       scrollDeltaY: scrollDeltaY,
+      scale: scale,
     );
   }
 
@@ -211,6 +239,7 @@ class PointerDataConverter {
   /// pointer data and stores it into [result]
   void convert(
     List<ui.PointerData> result, {
+    required int viewId,
     Duration timeStamp = Duration.zero,
     ui.PointerChange change = ui.PointerChange.cancel,
     ui.PointerDeviceKind kind = ui.PointerDeviceKind.touch,
@@ -235,21 +264,23 @@ class PointerDataConverter {
     int platformData = 0,
     double scrollDeltaX = 0.0,
     double scrollDeltaY = 0.0,
+    double scale = 1.0,
+    ui.PointerDataRespondCallback? onRespond,
   }) {
     if (_debugLogPointerConverter) {
-      print('>> device=$device change=$change buttons=$buttons');
+      print('>> view=$viewId device=$device change=$change buttons=$buttons');
     }
     final bool isDown = buttons != 0;
-    assert(change != null); // ignore: unnecessary_null_comparison
     if (signalKind == null ||
       signalKind == ui.PointerSignalKind.none) {
       switch (change) {
         case ui.PointerChange.add:
-          assert(!_pointers.containsKey(device));
-          _ensureStateForPointer(device, physicalX, physicalY);
+          assert(!globalPointerState.pointers.containsKey(device));
+          globalPointerState.ensurePointerDeviceState(device, physicalX, physicalY);
           assert(!_locationHasChanged(device, physicalX, physicalY));
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -274,17 +305,18 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
-          break;
         case ui.PointerChange.hover:
-          final bool alreadyAdded = _pointers.containsKey(device);
-          _ensureStateForPointer(device, physicalX, physicalY);
+          final bool alreadyAdded = globalPointerState.pointers.containsKey(device);
+          globalPointerState.ensurePointerDeviceState(device, physicalX, physicalY);
           assert(!isDown);
           if (!alreadyAdded) {
             // Synthesizes an add pointer data.
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.add,
                 kind: kind,
@@ -308,11 +340,13 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
           }
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -337,20 +371,21 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
-          _activeButtons = buttons;
-          break;
+          globalPointerState.activeButtons = buttons;
         case ui.PointerChange.down:
-          final bool alreadyAdded = _pointers.containsKey(device);
-          final _PointerState state = _ensureStateForPointer(
-            device, physicalX, physicalY);
+          final bool alreadyAdded = globalPointerState.pointers.containsKey(device);
+          final _PointerDeviceState state = globalPointerState.ensurePointerDeviceState(
+              device, physicalX, physicalY);
           assert(isDown);
           state.startNewPointer();
           if (!alreadyAdded) {
             // Synthesizes an add pointer data.
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.add,
                 kind: kind,
@@ -374,6 +409,7 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
           }
@@ -383,6 +419,7 @@ class PointerDataConverter {
             // sending the down event, if necessary.
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.hover,
                 kind: kind,
@@ -406,11 +443,13 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
           }
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -435,15 +474,16 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
-          _activeButtons = buttons;
-          break;
+          globalPointerState.activeButtons = buttons;
         case ui.PointerChange.move:
-          assert(_pointers.containsKey(device));
+          assert(globalPointerState.pointers.containsKey(device));
           assert(isDown);
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -468,14 +508,14 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
-          _activeButtons = buttons;
-          break;
+          globalPointerState.activeButtons = buttons;
         case ui.PointerChange.up:
         case ui.PointerChange.cancel:
-          assert(_pointers.containsKey(device));
-          final _PointerState state = _pointers[device]!;
+          assert(globalPointerState.pointers.containsKey(device));
+          final _PointerDeviceState state = globalPointerState.pointers[device]!;
           assert(!isDown);
           // Cancel events can have different coordinates due to various
           // reasons (window lost focus which is accompanied by window
@@ -491,13 +531,14 @@ class PointerDataConverter {
             // sending the up event, if necessary.
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.move,
                 kind: kind,
                 device: device,
                 physicalX: physicalX,
                 physicalY: physicalY,
-                buttons: _activeButtons,
+                buttons: globalPointerState.activeButtons,
                 obscured: obscured,
                 pressure: pressure,
                 pressureMin: pressureMin,
@@ -514,11 +555,13 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
           }
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -543,6 +586,7 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
           if (kind == ui.PointerDeviceKind.touch) {
@@ -551,6 +595,7 @@ class PointerDataConverter {
             // over (i.e. when "up" or "cancel" is received).
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.remove,
                 kind: kind,
@@ -574,17 +619,18 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
-            _pointers.remove(device);
+            globalPointerState.pointers.remove(device);
           }
-          break;
         case ui.PointerChange.remove:
-          assert(_pointers.containsKey(device));
-          final _PointerState state = _pointers[device]!;
+          assert(globalPointerState.pointers.containsKey(device));
+          final _PointerDeviceState state = globalPointerState.pointers[device]!;
           assert(!isDown);
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -609,20 +655,28 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
             )
           );
-          _pointers.remove(device);
-          break;
+          globalPointerState.pointers.remove(device);
+        case ui.PointerChange.panZoomStart:
+        case ui.PointerChange.panZoomUpdate:
+        case ui.PointerChange.panZoomEnd:
+          // Pointer pan/zoom events are not generated on web.
+          assert(false);
       }
     } else {
       switch (signalKind) {
         case ui.PointerSignalKind.scroll:
-          final bool alreadyAdded = _pointers.containsKey(device);
-          _ensureStateForPointer(device, physicalX, physicalY);
+        case ui.PointerSignalKind.scrollInertiaCancel:
+        case ui.PointerSignalKind.scale:
+          final bool alreadyAdded = globalPointerState.pointers.containsKey(device);
+          globalPointerState.ensurePointerDeviceState(device, physicalX, physicalY);
           if (!alreadyAdded) {
             // Synthesizes an add pointer data.
             result.add(
               _synthesizePointerData(
+                viewId: viewId,
                 timeStamp: timeStamp,
                 change: ui.PointerChange.add,
                 kind: kind,
@@ -646,6 +700,7 @@ class PointerDataConverter {
                 platformData: platformData,
                 scrollDeltaX: scrollDeltaX,
                 scrollDeltaY: scrollDeltaY,
+                scale: scale,
               )
             );
           }
@@ -657,6 +712,7 @@ class PointerDataConverter {
             if (isDown) {
               result.add(
                 _synthesizePointerData(
+                  viewId: viewId,
                   timeStamp: timeStamp,
                   change: ui.PointerChange.move,
                   kind: kind,
@@ -680,11 +736,13 @@ class PointerDataConverter {
                   platformData: platformData,
                   scrollDeltaX: scrollDeltaX,
                   scrollDeltaY: scrollDeltaY,
+                  scale: scale,
                 )
               );
             } else {
               result.add(
                 _synthesizePointerData(
+                  viewId: viewId,
                   timeStamp: timeStamp,
                   change: ui.PointerChange.hover,
                   kind: kind,
@@ -708,12 +766,14 @@ class PointerDataConverter {
                   platformData: platformData,
                   scrollDeltaX: scrollDeltaX,
                   scrollDeltaY: scrollDeltaY,
+                  scale: scale,
                 )
               );
             }
           }
           result.add(
             _generateCompletePointerData(
+              viewId: viewId,
               timeStamp: timeStamp,
               change: change,
               kind: kind,
@@ -738,12 +798,12 @@ class PointerDataConverter {
               platformData: platformData,
               scrollDeltaX: scrollDeltaX,
               scrollDeltaY: scrollDeltaY,
+              scale: scale,
+              onRespond: onRespond,
             )
           );
-          break;
         case ui.PointerSignalKind.none:
           assert(false); // This branch should already have 'none' filtered out.
-          break;
         case ui.PointerSignalKind.unknown:
         // Ignore unknown signals.
           break;

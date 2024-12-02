@@ -4,7 +4,7 @@
 #include "flutter/testing/testing.h"
 
 #import "flutter/shell/platform/darwin/macos/framework/Headers/FlutterEngine.h"
-#import "flutter/shell/platform/darwin/macos/framework/Source/AccessibilityBridgeMacDelegate.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/AccessibilityBridgeMac.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterDartProject_Internal.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterEngine_Internal.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterPlatformNodeDelegateMac.h"
@@ -19,22 +19,23 @@
 namespace flutter::testing {
 
 namespace {
-// Returns an engine configured for the text fixture resource configuration.
-FlutterEngine* CreateTestEngine() {
+// Returns a view controller configured for the text fixture resource configuration.
+FlutterViewController* CreateTestViewController() {
   NSString* fixtures = @(testing::GetFixturesPath());
   FlutterDartProject* project = [[FlutterDartProject alloc]
       initWithAssetsPath:fixtures
              ICUDataPath:[fixtures stringByAppendingString:@"/icudtl.dat"]];
-  return [[FlutterEngine alloc] initWithName:@"test" project:project allowHeadlessExecution:true];
+  return [[FlutterViewController alloc] initWithProject:project];
 }
 }  // namespace
 
 TEST(FlutterPlatformNodeDelegateMac, Basics) {
-  FlutterEngine* engine = CreateTestEngine();
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
   engine.semanticsEnabled = YES;
-  auto bridge = engine.accessibilityBridge.lock();
+  auto bridge = viewController.accessibilityBridge.lock();
   // Initialize ax node data.
-  FlutterSemanticsNode root;
+  FlutterSemanticsNode2 root;
   root.id = 0;
   root.flags = static_cast<FlutterSemanticsFlag>(0);
   ;
@@ -46,9 +47,10 @@ TEST(FlutterPlatformNodeDelegateMac, Basics) {
   root.value = "";
   root.increased_value = "";
   root.decreased_value = "";
+  root.tooltip = "";
   root.child_count = 0;
   root.custom_accessibility_actions_count = 0;
-  bridge->AddFlutterSemanticsNodeUpdate(&root);
+  bridge->AddFlutterSemanticsNodeUpdate(root);
 
   bridge->CommitUpdates();
 
@@ -64,11 +66,12 @@ TEST(FlutterPlatformNodeDelegateMac, Basics) {
 }
 
 TEST(FlutterPlatformNodeDelegateMac, SelectableTextHasCorrectSemantics) {
-  FlutterEngine* engine = CreateTestEngine();
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
   engine.semanticsEnabled = YES;
-  auto bridge = engine.accessibilityBridge.lock();
+  auto bridge = viewController.accessibilityBridge.lock();
   // Initialize ax node data.
-  FlutterSemanticsNode root;
+  FlutterSemanticsNode2 root;
   root.id = 0;
   root.flags =
       static_cast<FlutterSemanticsFlag>(FlutterSemanticsFlag::kFlutterSemanticsFlagIsTextField |
@@ -82,9 +85,10 @@ TEST(FlutterPlatformNodeDelegateMac, SelectableTextHasCorrectSemantics) {
   root.value = "selectable text";
   root.increased_value = "";
   root.decreased_value = "";
+  root.tooltip = "";
   root.child_count = 0;
   root.custom_accessibility_actions_count = 0;
-  bridge->AddFlutterSemanticsNodeUpdate(&root);
+  bridge->AddFlutterSemanticsNodeUpdate(root);
 
   bridge->CommitUpdates();
 
@@ -104,11 +108,12 @@ TEST(FlutterPlatformNodeDelegateMac, SelectableTextHasCorrectSemantics) {
 }
 
 TEST(FlutterPlatformNodeDelegateMac, SelectableTextWithoutSelectionReturnZeroRange) {
-  FlutterEngine* engine = CreateTestEngine();
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
   engine.semanticsEnabled = YES;
-  auto bridge = engine.accessibilityBridge.lock();
+  auto bridge = viewController.accessibilityBridge.lock();
   // Initialize ax node data.
-  FlutterSemanticsNode root;
+  FlutterSemanticsNode2 root;
   root.id = 0;
   root.flags =
       static_cast<FlutterSemanticsFlag>(FlutterSemanticsFlag::kFlutterSemanticsFlagIsTextField |
@@ -122,9 +127,10 @@ TEST(FlutterPlatformNodeDelegateMac, SelectableTextWithoutSelectionReturnZeroRan
   root.value = "selectable text";
   root.increased_value = "";
   root.decreased_value = "";
+  root.tooltip = "";
   root.child_count = 0;
   root.custom_accessibility_actions_count = 0;
-  bridge->AddFlutterSemanticsNodeUpdate(&root);
+  bridge->AddFlutterSemanticsNodeUpdate(root);
 
   bridge->CommitUpdates();
 
@@ -137,16 +143,12 @@ TEST(FlutterPlatformNodeDelegateMac, SelectableTextWithoutSelectionReturnZeroRan
   EXPECT_EQ(selection.length, 0u);
 }
 
-TEST(FlutterPlatformNodeDelegateMac, CanPerformAction) {
-  FlutterEngine* engine = CreateTestEngine();
+// MOCK_ENGINE_PROC is leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
 
-  // Set up view controller.
-  NSString* fixtures = @(testing::GetFixturesPath());
-  FlutterDartProject* project = [[FlutterDartProject alloc]
-      initWithAssetsPath:fixtures
-             ICUDataPath:[fixtures stringByAppendingString:@"/icudtl.dat"]];
-  FlutterViewController* viewController = [[FlutterViewController alloc] initWithProject:project];
-  [engine setViewController:viewController];
+TEST(FlutterPlatformNodeDelegateMac, CanPerformAction) {
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
 
   // Attach the view to a NSWindow.
   NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 600)
@@ -156,31 +158,33 @@ TEST(FlutterPlatformNodeDelegateMac, CanPerformAction) {
   window.contentView = viewController.view;
 
   engine.semanticsEnabled = YES;
-  auto bridge = engine.accessibilityBridge.lock();
+  auto bridge = viewController.accessibilityBridge.lock();
   // Initialize ax node data.
-  FlutterSemanticsNode root;
+  FlutterSemanticsNode2 root;
   root.id = 0;
   root.label = "root";
   root.hint = "";
   root.value = "";
   root.increased_value = "";
   root.decreased_value = "";
+  root.tooltip = "";
   root.child_count = 1;
   int32_t children[] = {1};
   root.children_in_traversal_order = children;
   root.custom_accessibility_actions_count = 0;
-  bridge->AddFlutterSemanticsNodeUpdate(&root);
+  bridge->AddFlutterSemanticsNodeUpdate(root);
 
-  FlutterSemanticsNode child1;
+  FlutterSemanticsNode2 child1;
   child1.id = 1;
   child1.label = "child 1";
   child1.hint = "";
   child1.value = "";
   child1.increased_value = "";
   child1.decreased_value = "";
+  child1.tooltip = "";
   child1.child_count = 0;
   child1.custom_accessibility_actions_count = 0;
-  bridge->AddFlutterSemanticsNodeUpdate(&child1);
+  bridge->AddFlutterSemanticsNodeUpdate(child1);
 
   bridge->CommitUpdates();
 
@@ -211,15 +215,15 @@ TEST(FlutterPlatformNodeDelegateMac, CanPerformAction) {
   [engine shutDownEngine];
 }
 
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)
+
 TEST(FlutterPlatformNodeDelegateMac, TextFieldUsesFlutterTextField) {
-  FlutterEngine* engine = CreateTestEngine();
-  NSString* fixtures = @(testing::GetFixturesPath());
-  FlutterDartProject* project = [[FlutterDartProject alloc]
-      initWithAssetsPath:fixtures
-             ICUDataPath:[fixtures stringByAppendingString:@"/icudtl.dat"]];
-  FlutterViewController* viewController = [[FlutterViewController alloc] initWithProject:project];
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
   [viewController loadView];
-  [engine setViewController:viewController];
+
+  // Unit test localization is unnecessary.
+  // NOLINTNEXTLINE(clang-analyzer-optin.osx.cocoa.localizability.NonLocalizedStringChecker)
   viewController.textInputPlugin.string = @"textfield";
   // Creates a NSWindow so that the native text field can become first responder.
   NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 600)
@@ -229,9 +233,9 @@ TEST(FlutterPlatformNodeDelegateMac, TextFieldUsesFlutterTextField) {
   window.contentView = viewController.view;
   engine.semanticsEnabled = YES;
 
-  auto bridge = engine.accessibilityBridge.lock();
+  auto bridge = viewController.accessibilityBridge.lock();
   // Initialize ax node data.
-  FlutterSemanticsNode root;
+  FlutterSemanticsNode2 root;
   root.id = 0;
   root.flags = static_cast<FlutterSemanticsFlag>(0);
   root.actions = static_cast<FlutterSemanticsAction>(0);
@@ -240,18 +244,19 @@ TEST(FlutterPlatformNodeDelegateMac, TextFieldUsesFlutterTextField) {
   root.value = "";
   root.increased_value = "";
   root.decreased_value = "";
+  root.tooltip = "";
   root.child_count = 1;
   int32_t children[] = {1};
   root.children_in_traversal_order = children;
   root.custom_accessibility_actions_count = 0;
   root.rect = {0, 0, 100, 100};  // LTRB
   root.transform = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  bridge->AddFlutterSemanticsNodeUpdate(&root);
+  bridge->AddFlutterSemanticsNodeUpdate(root);
 
   double rectSize = 50;
   double transformFactor = 0.5;
 
-  FlutterSemanticsNode child1;
+  FlutterSemanticsNode2 child1;
   child1.id = 1;
   child1.flags = FlutterSemanticsFlag::kFlutterSemanticsFlagIsTextField;
   child1.actions = static_cast<FlutterSemanticsAction>(0);
@@ -260,13 +265,14 @@ TEST(FlutterPlatformNodeDelegateMac, TextFieldUsesFlutterTextField) {
   child1.value = "textfield";
   child1.increased_value = "";
   child1.decreased_value = "";
+  child1.tooltip = "";
   child1.text_selection_base = -1;
   child1.text_selection_extent = -1;
   child1.child_count = 0;
   child1.custom_accessibility_actions_count = 0;
   child1.rect = {0, 0, rectSize, rectSize};  // LTRB
   child1.transform = {transformFactor, 0, 0, 0, transformFactor, 0, 0, 0, 1};
-  bridge->AddFlutterSemanticsNodeUpdate(&child1);
+  bridge->AddFlutterSemanticsNodeUpdate(child1);
 
   bridge->CommitUpdates();
 
@@ -285,10 +291,86 @@ TEST(FlutterPlatformNodeDelegateMac, TextFieldUsesFlutterTextField) {
   EXPECT_EQ(NSEqualRects(native_text_field.frame, NSMakeRect(0, 600 - expectedFrameSize,
                                                              expectedFrameSize, expectedFrameSize)),
             YES);
-  // The text of TextInputPlugin only starts syncing editing state to the
-  // native text field when it becomes the first responder.
-  [native_text_field becomeFirstResponder];
+
+  [native_text_field startEditing];
   EXPECT_EQ([native_text_field.stringValue isEqualToString:@"textfield"], YES);
 }
 
-}  // flutter::testing
+TEST(FlutterPlatformNodeDelegateMac, ChangingFlagsUpdatesNativeViewAccessible) {
+  FlutterViewController* viewController = CreateTestViewController();
+  FlutterEngine* engine = viewController.engine;
+  [viewController loadView];
+
+  // Creates a NSWindow so that the native text field can become first responder.
+  NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 600)
+                                                 styleMask:NSBorderlessWindowMask
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
+  window.contentView = viewController.view;
+  engine.semanticsEnabled = YES;
+
+  auto bridge = viewController.accessibilityBridge.lock();
+  // Initialize ax node data.
+  FlutterSemanticsNode2 root;
+  root.id = 0;
+  root.flags = static_cast<FlutterSemanticsFlag>(0);
+  root.actions = static_cast<FlutterSemanticsAction>(0);
+  root.label = "root";
+  root.hint = "";
+  root.value = "";
+  root.increased_value = "";
+  root.decreased_value = "";
+  root.tooltip = "";
+  root.child_count = 1;
+  int32_t children[] = {1};
+  root.children_in_traversal_order = children;
+  root.custom_accessibility_actions_count = 0;
+  root.rect = {0, 0, 100, 100};  // LTRB
+  root.transform = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  bridge->AddFlutterSemanticsNodeUpdate(root);
+
+  double rectSize = 50;
+  double transformFactor = 0.5;
+
+  FlutterSemanticsNode2 child1;
+  child1.id = 1;
+  child1.flags = static_cast<FlutterSemanticsFlag>(0);
+  child1.actions = static_cast<FlutterSemanticsAction>(0);
+  child1.label = "";
+  child1.hint = "";
+  child1.value = "textfield";
+  child1.increased_value = "";
+  child1.decreased_value = "";
+  child1.tooltip = "";
+  child1.text_selection_base = -1;
+  child1.text_selection_extent = -1;
+  child1.child_count = 0;
+  child1.custom_accessibility_actions_count = 0;
+  child1.rect = {0, 0, rectSize, rectSize};  // LTRB
+  child1.transform = {transformFactor, 0, 0, 0, transformFactor, 0, 0, 0, 1};
+  bridge->AddFlutterSemanticsNodeUpdate(child1);
+
+  bridge->CommitUpdates();
+
+  auto child_platform_node_delegate = bridge->GetFlutterPlatformNodeDelegateFromID(1).lock();
+  // Verify the accessibility attribute matches.
+  id native_accessibility = child_platform_node_delegate->GetNativeViewAccessible();
+  EXPECT_TRUE([[native_accessibility className] isEqualToString:@"AXPlatformNodeCocoa"]);
+
+  // Converting child to text field should produce `FlutterTextField` native view accessible.
+  child1.flags = FlutterSemanticsFlag::kFlutterSemanticsFlagIsTextField;
+  bridge->AddFlutterSemanticsNodeUpdate(child1);
+  bridge->CommitUpdates();
+
+  native_accessibility = child_platform_node_delegate->GetNativeViewAccessible();
+  EXPECT_TRUE([native_accessibility isKindOfClass:[FlutterTextField class]]);
+
+  child1.flags = static_cast<FlutterSemanticsFlag>(0);
+  bridge->AddFlutterSemanticsNodeUpdate(child1);
+  bridge->CommitUpdates();
+
+  native_accessibility = child_platform_node_delegate->GetNativeViewAccessible();
+  EXPECT_TRUE([[native_accessibility className] isEqualToString:@"AXPlatformNodeCocoa"]);
+}
+
+}  // namespace flutter::testing

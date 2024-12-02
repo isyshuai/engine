@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_GRAPH_H_
-#define FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_GRAPH_H_
+#ifndef FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_TYPES_H_
+#define FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_TYPES_H_
 
 #include <fuchsia/math/cpp/fidl.h>
 #include <fuchsia/ui/composition/cpp/fidl.h>
@@ -15,6 +15,8 @@
 #include <lib/fidl/cpp/interface_request.h>
 #include <zircon/types.h>
 
+#include <algorithm>
+#include <cfloat>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -23,13 +25,27 @@
 
 #include "flutter/fml/macros.h"
 
+namespace fuchsia {
+namespace math {
+
 inline bool operator==(const fuchsia::math::SizeU& a,
                        const fuchsia::math::SizeU& b) {
   return a.width == b.width && a.height == b.height;
 }
 
+inline bool operator==(const fuchsia::math::Inset& a,
+                       const fuchsia::math::Inset& b) {
+  return a.top == b.top && a.left == b.left && a.right == b.right &&
+         a.bottom == b.bottom;
+}
+
 inline bool operator==(const fuchsia::math::Vec& a,
                        const fuchsia::math::Vec& b) {
+  return a.x == b.x && a.y == b.y;
+}
+
+inline bool operator==(const fuchsia::math::VecF& a,
+                       const fuchsia::math::VecF& b) {
   return a.x == b.x && a.y == b.y;
 }
 
@@ -42,6 +58,20 @@ inline bool operator==(const fuchsia::math::RectF& a,
                        const fuchsia::math::RectF& b) {
   return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
 }
+
+inline bool operator==(const std::optional<fuchsia::math::Rect>& a,
+                       const std::optional<fuchsia::math::Rect>& b) {
+  if (a.has_value() != b.has_value()) {
+    return false;
+  }
+  if (!a.has_value()) {
+  }
+  return a.value() == b.value();
+}
+
+}  // namespace math
+
+namespace ui::composition {
 
 inline bool operator==(const fuchsia::ui::composition::ContentId& a,
                        const fuchsia::ui::composition::ContentId& b) {
@@ -87,10 +117,40 @@ inline bool operator==(const fuchsia::ui::composition::ImageProperties& a,
   return size_equal;
 }
 
+inline bool operator==(const fuchsia::ui::composition::HitRegion& a,
+                       const fuchsia::ui::composition::HitRegion& b) {
+  return a.region == b.region && a.hit_test == b.hit_test;
+}
+
+inline bool operator!=(const fuchsia::ui::composition::HitRegion& a,
+                       const fuchsia::ui::composition::HitRegion& b) {
+  return !(a == b);
+}
+
+inline bool operator==(
+    const std::vector<fuchsia::ui::composition::HitRegion>& a,
+    const std::vector<fuchsia::ui::composition::HitRegion>& b) {
+  if (a.size() != b.size())
+    return false;
+
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] != b[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+}  // namespace ui::composition
+}  // namespace fuchsia
+
 namespace flutter_runner::testing {
 
 constexpr static fuchsia::ui::composition::TransformId kInvalidTransformId{0};
 constexpr static fuchsia::ui::composition::ContentId kInvalidContentId{0};
+constexpr static fuchsia::ui::composition::HitRegion kInfiniteHitRegion = {
+    .region = {-FLT_MAX, -FLT_MAX, FLT_MAX, FLT_MAX}};
 
 // Convenience structure which allows clients to easily create a valid
 // `ViewCreationToken` / `ViewportCreationToken` pair for use with Flatland
@@ -129,6 +189,7 @@ struct FakeViewport {
   bool operator==(const FakeViewport& other) const;
 
   constexpr static fuchsia::math::SizeU kDefaultViewportLogicalSize{};
+  constexpr static fuchsia::math::Inset kDefaultViewportInset{};
 
   fuchsia::ui::composition::ContentId id{kInvalidContentId};
 
@@ -144,6 +205,8 @@ struct FakeImage {
   constexpr static fuchsia::math::RectF kDefaultSampleRegion{};
   constexpr static fuchsia::math::SizeU kDefaultDestinationSize{};
   constexpr static float kDefaultOpacity{1.f};
+  constexpr static fuchsia::ui::composition::BlendMode kDefaultBlendMode{
+      fuchsia::ui::composition::BlendMode::SRC_OVER};
 
   fuchsia::ui::composition::ContentId id{kInvalidContentId};
 
@@ -151,6 +214,7 @@ struct FakeImage {
   fuchsia::math::RectF sample_region{kDefaultSampleRegion};
   fuchsia::math::SizeU destination_size{kDefaultDestinationSize};
   float opacity{kDefaultOpacity};
+  fuchsia::ui::composition::BlendMode blend_mode{kDefaultBlendMode};
 
   zx_koid_t import_token{};
   uint32_t vmo_index{0};
@@ -162,21 +226,24 @@ struct FakeTransform {
   bool operator==(const FakeTransform& other) const;
 
   constexpr static fuchsia::math::Vec kDefaultTranslation{.x = 0, .y = 0};
-  constexpr static fuchsia::math::Rect kDefaultClipBounds{.x = 0,
-                                                          .y = 0,
-                                                          .width = 0,
-                                                          .height = 0};
+  constexpr static fuchsia::math::VecF kDefaultScale{.x = 1.0f, .y = 1.0f};
   constexpr static fuchsia::ui::composition::Orientation kDefaultOrientation{
       fuchsia::ui::composition::Orientation::CCW_0_DEGREES};
+  constexpr static float kDefaultOpacity = 1.0f;
 
   fuchsia::ui::composition::TransformId id{kInvalidTransformId};
 
   fuchsia::math::Vec translation{kDefaultTranslation};
-  fuchsia::math::Rect clip_bounds{kDefaultClipBounds};
+  fuchsia::math::VecF scale{kDefaultScale};
   fuchsia::ui::composition::Orientation orientation{kDefaultOrientation};
+
+  std::optional<fuchsia::math::Rect> clip_bounds = std::nullopt;
+
+  float opacity = kDefaultOpacity;
 
   std::vector<std::shared_ptr<FakeTransform>> children;
   std::shared_ptr<FakeContent> content;
+  std::vector<fuchsia::ui::composition::HitRegion> hit_regions;
 };
 
 struct FakeGraph {
@@ -263,4 +330,4 @@ inline std::pair<zx_koid_t, zx_koid_t> GetKoids(
 
 };  // namespace flutter_runner::testing
 
-#endif  // FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_GRAPH_H_
+#endif  // FLUTTER_SHELL_PLATFORM_FUCHSIA_FLUTTER_TESTS_FAKES_SCENIC_FAKE_FLATLAND_TYPES_H_

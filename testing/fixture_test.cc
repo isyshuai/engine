@@ -4,17 +4,19 @@
 
 #include "flutter/testing/fixture_test.h"
 
+#include <utility>
+
 #include "flutter/testing/dart_fixture.h"
 
-namespace flutter {
-namespace testing {
+namespace flutter::testing {
 
 FixtureTest::FixtureTest() : DartFixture() {}
 
 FixtureTest::FixtureTest(std::string kernel_filename,
                          std::string elf_filename,
                          std::string elf_split_filename)
-    : DartFixture(kernel_filename, elf_filename, elf_split_filename) {}
+    : DartFixture(std::move(kernel_filename),
+                  std::move(elf_filename),
+                  std::move(elf_split_filename)) {}
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing

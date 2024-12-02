@@ -4,11 +4,14 @@
 
 package io.flutter.view;
 
+import static io.flutter.Build.API_LEVELS;
+
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.database.ContentObserver;
 import android.graphics.Rect;
 import android.net.Uri;
@@ -119,6 +122,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   // framework generated IDs
   // and the most significant 16 bits are used for engine generated IDs.
   private static final int MIN_ENGINE_GENERATED_NODE_ID = 1 << 16;
+
+  // Font weight adjustment for bold text. FontWeight.Bold - FontWeight.Normal = w700 - w400 = 300.
+  private static final int BOLD_TEXT_WEIGHT_ADJUSTMENT = 300;
+
+  // Default transition animation scale (animations enabled)
+  private static final float DEFAULT_TRANSITION_ANIMATION_SCALE = 1.0f;
+
+  // Transition animation scale when animations are disabled
+  private static final float DISABLED_TRANSITION_ANIMATION_SCALE = 0.0f;
 
   /// Value is derived from ACTION_TYPE_MASK in AccessibilityNodeInfo.java
   private static int FIRST_RESOURCE_ID = 267386881;
@@ -257,6 +269,30 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
   @Nullable private OnAccessibilityChangeListener onAccessibilityChangeListener;
 
+  // Whether the users are using assistive technologies to interact with the devices.
+  //
+  // The getter returns true when at least one of the assistive technologies is running:
+  // TalkBack, SwitchAccess, or VoiceAccess.
+  @VisibleForTesting
+  public boolean getAccessibleNavigation() {
+    return accessibleNavigation;
+  }
+
+  private boolean accessibleNavigation = false;
+
+  private void setAccessibleNavigation(boolean value) {
+    if (accessibleNavigation == value) {
+      return;
+    }
+    accessibleNavigation = value;
+    if (accessibleNavigation) {
+      accessibilityFeatureFlags |= AccessibilityFeature.ACCESSIBLE_NAVIGATION.value;
+    } else {
+      accessibilityFeatureFlags &= ~AccessibilityFeature.ACCESSIBLE_NAVIGATION.value;
+    }
+    sendLatestAccessibilityFlagsToFlutter();
+  }
+
   // Set to true after {@code release} has been invoked.
   private boolean isReleased = false;
 
@@ -281,6 +317,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
           sendAccessibilityEvent(nodeId, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
         }
 
+        /** The framework has requested focus on the given {@code nodeId}. */
+        @Override
+        public void onFocus(int nodeId) {
+          sendAccessibilityEvent(nodeId, AccessibilityEvent.TYPE_VIEW_FOCUSED);
+        }
+
         /** The user has opened a tooltip. */
         @Override
         public void onTooltip(@NonNull String message) {
@@ -290,7 +332,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
           //
           // To reproduce native behavior, see
           // https://developer.android.com/guide/topics/ui/tooltips.
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+          if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
             return;
           }
           AccessibilityEvent e =
@@ -331,6 +373,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
                 accessibilityChannel.setAccessibilityMessageHandler(accessibilityMessageHandler);
                 accessibilityChannel.onAndroidAccessibilityEnabled();
               } else {
+                setAccessibleNavigation(false);
                 accessibilityChannel.setAccessibilityMessageHandler(null);
                 accessibilityChannel.onAndroidAccessibilityDisabled();
               }
@@ -344,8 +387,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
   // Listener that is notified when accessibility touch exploration is turned on/off.
   // This is guarded at instantiation time.
-  @TargetApi(19)
-  @RequiresApi(19)
   private final AccessibilityManager.TouchExplorationStateChangeListener
       touchExplorationStateChangeListener;
 
@@ -364,13 +405,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
             return;
           }
           // Retrieve the current value of TRANSITION_ANIMATION_SCALE from the OS.
-          String value =
-              Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1
-                  ? null
-                  : Settings.Global.getString(
-                      contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE);
+          float value =
+              Settings.Global.getFloat(
+                  contentResolver,
+                  Settings.Global.TRANSITION_ANIMATION_SCALE,
+                  DEFAULT_TRANSITION_ANIMATION_SCALE);
 
-          boolean shouldAnimationsBeDisabled = value != null && value.equals("0");
+          boolean shouldAnimationsBeDisabled = value == DISABLED_TRANSITION_ANIMATION_SCALE;
           if (shouldAnimationsBeDisabled) {
             accessibilityFeatureFlags |= AccessibilityFeature.DISABLE_ANIMATIONS.value;
           } else {
@@ -409,7 +450,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     this.contentResolver = contentResolver;
     this.accessibilityViewEmbedder = accessibilityViewEmbedder;
     this.platformViewsAccessibilityDelegate = platformViewsAccessibilityDelegate;
-
     // Tell Flutter whether accessibility is initially active or not. Then register a listener
     // to be notified of changes in the future.
     accessibilityStateChangeListener.onAccessibilityStateChanged(accessibilityManager.isEnabled());
@@ -417,42 +457,39 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
     // Tell Flutter whether touch exploration is initially active or not. Then register a listener
     // to be notified of changes in the future.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      touchExplorationStateChangeListener =
-          new AccessibilityManager.TouchExplorationStateChangeListener() {
-            @Override
-            public void onTouchExplorationStateChanged(boolean isTouchExplorationEnabled) {
-              if (isReleased) {
-                return;
-              }
-              if (isTouchExplorationEnabled) {
-                accessibilityFeatureFlags |= AccessibilityFeature.ACCESSIBLE_NAVIGATION.value;
-              } else {
-                onTouchExplorationExit();
-                accessibilityFeatureFlags &= ~AccessibilityFeature.ACCESSIBLE_NAVIGATION.value;
-              }
-              sendLatestAccessibilityFlagsToFlutter();
-
-              if (onAccessibilityChangeListener != null) {
-                onAccessibilityChangeListener.onAccessibilityChanged(
-                    accessibilityManager.isEnabled(), isTouchExplorationEnabled);
-              }
+    touchExplorationStateChangeListener =
+        new AccessibilityManager.TouchExplorationStateChangeListener() {
+          @Override
+          public void onTouchExplorationStateChanged(boolean isTouchExplorationEnabled) {
+            if (isReleased) {
+              return;
             }
-          };
-      touchExplorationStateChangeListener.onTouchExplorationStateChanged(
-          accessibilityManager.isTouchExplorationEnabled());
-      this.accessibilityManager.addTouchExplorationStateChangeListener(
-          touchExplorationStateChangeListener);
-    } else {
-      touchExplorationStateChangeListener = null;
-    }
+            if (!isTouchExplorationEnabled) {
+              setAccessibleNavigation(false);
+              onTouchExplorationExit();
+            }
+
+            if (onAccessibilityChangeListener != null) {
+              onAccessibilityChangeListener.onAccessibilityChanged(
+                  accessibilityManager.isEnabled(), isTouchExplorationEnabled);
+            }
+          }
+        };
+    touchExplorationStateChangeListener.onTouchExplorationStateChanged(
+        accessibilityManager.isTouchExplorationEnabled());
+    this.accessibilityManager.addTouchExplorationStateChangeListener(
+        touchExplorationStateChangeListener);
 
     // Tell Flutter whether animations should initially be enabled or disabled. Then register a
     // listener to be notified of changes in the future.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-      animationScaleObserver.onChange(false);
-      Uri transitionUri = Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE);
-      this.contentResolver.registerContentObserver(transitionUri, false, animationScaleObserver);
+    animationScaleObserver.onChange(false);
+    Uri transitionUri = Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE);
+    this.contentResolver.registerContentObserver(transitionUri, false, animationScaleObserver);
+
+    // Tells Flutter whether the text should be bolded or not. If the user changes bold text
+    // setting, the configuration will change and trigger a re-build of the accesibiltyBridge.
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_31) {
+      setBoldTextFlag();
     }
 
     platformViewsAccessibilityDelegate.attachAccessibilityBridge(this);
@@ -470,10 +507,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     platformViewsAccessibilityDelegate.detachAccessibilityBridge();
     setOnAccessibilityChangeListener(null);
     accessibilityManager.removeAccessibilityStateChangeListener(accessibilityStateChangeListener);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      accessibilityManager.removeTouchExplorationStateChangeListener(
-          touchExplorationStateChangeListener);
-    }
+    accessibilityManager.removeTouchExplorationStateChangeListener(
+        touchExplorationStateChangeListener);
     contentResolver.unregisterContentObserver(animationScaleObserver);
     accessibilityChannel.setAccessibilityMessageHandler(null);
   }
@@ -518,6 +553,31 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
                 accessibilityFocusedSemanticsNode, o -> o.hasFlag(Flag.HAS_IMPLICIT_SCROLLING)));
   }
 
+  @TargetApi(API_LEVELS.API_31)
+  @RequiresApi(API_LEVELS.API_31)
+  private void setBoldTextFlag() {
+    if (rootAccessibilityView == null || rootAccessibilityView.getResources() == null) {
+      return;
+    }
+    int fontWeightAdjustment =
+        rootAccessibilityView.getResources().getConfiguration().fontWeightAdjustment;
+    boolean shouldBold =
+        fontWeightAdjustment != Configuration.FONT_WEIGHT_ADJUSTMENT_UNDEFINED
+            && fontWeightAdjustment >= BOLD_TEXT_WEIGHT_ADJUSTMENT;
+
+    if (shouldBold) {
+      accessibilityFeatureFlags |= AccessibilityFeature.BOLD_TEXT.value;
+    } else {
+      accessibilityFeatureFlags &= ~AccessibilityFeature.BOLD_TEXT.value;
+    }
+    sendLatestAccessibilityFlagsToFlutter();
+  }
+
+  @VisibleForTesting
+  public AccessibilityNodeInfo obtainAccessibilityNodeInfo(View rootView) {
+    return AccessibilityNodeInfo.obtain(rootView);
+  }
+
   @VisibleForTesting
   public AccessibilityNodeInfo obtainAccessibilityNodeInfo(View rootView, int virtualViewId) {
     return AccessibilityNodeInfo.obtain(rootView, virtualViewId);
@@ -551,6 +611,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   // Suppressing Lint warning for new API, as we are version guarding all calls to newer APIs
   @SuppressLint("NewApi")
   public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
+    setAccessibleNavigation(true);
     if (virtualViewId >= MIN_ENGINE_GENERATED_NODE_ID) {
       // The node is in the engine generated range, and is provided by the accessibility view
       // embedder.
@@ -558,12 +619,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     }
 
     if (virtualViewId == View.NO_ID) {
-      AccessibilityNodeInfo result = AccessibilityNodeInfo.obtain(rootAccessibilityView);
+      AccessibilityNodeInfo result = obtainAccessibilityNodeInfo(rootAccessibilityView);
       rootAccessibilityView.onInitializeAccessibilityNodeInfo(result);
       // TODO(mattcarroll): what does it mean for the semantics tree to contain or not contain
       //                    the root node ID?
       if (flutterSemanticsTree.containsKey(ROOT_NODE_ID)) {
         result.addChild(rootAccessibilityView, ROOT_NODE_ID);
+      }
+      if (Build.VERSION.SDK_INT >= API_LEVELS.API_24) {
+        result.setImportantForAccessibility(false);
       }
       return result;
     }
@@ -582,9 +646,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     //
     // See the case down below for how hybrid composition is handled.
     if (semanticsNode.platformViewId != -1) {
-      View embeddedView =
-          platformViewsAccessibilityDelegate.getPlatformViewById(semanticsNode.platformViewId);
       if (platformViewsAccessibilityDelegate.usesVirtualDisplay(semanticsNode.platformViewId)) {
+        View embeddedView =
+            platformViewsAccessibilityDelegate.getPlatformViewById(semanticsNode.platformViewId);
+        if (embeddedView == null) {
+          return null;
+        }
         Rect bounds = semanticsNode.getGlobalRect();
         return accessibilityViewEmbedder.getRootNode(embeddedView, semanticsNode.id, bounds);
       }
@@ -592,9 +659,17 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
     AccessibilityNodeInfo result =
         obtainAccessibilityNodeInfo(rootAccessibilityView, virtualViewId);
-    // Work around for https://github.com/flutter/flutter/issues/2101
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-      result.setViewIdResourceName("");
+
+    // Accessibility Scanner uses isImportantForAccessibility to decide whether to check
+    // or skip this node.
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_24) {
+      result.setImportantForAccessibility(isImportant(semanticsNode));
+    }
+
+    // Work around for https://github.com/flutter/flutter/issues/21030
+    result.setViewIdResourceName("");
+    if (semanticsNode.identifier != null) {
+      result.setViewIdResourceName(semanticsNode.identifier);
     }
     result.setPackageName(rootAccessibilityView.getContext().getPackageName());
     result.setClassName("android.view.View");
@@ -613,20 +688,16 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       if (!semanticsNode.hasFlag(Flag.IS_READ_ONLY)) {
         result.setClassName("android.widget.EditText");
       }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-        result.setEditable(!semanticsNode.hasFlag(Flag.IS_READ_ONLY));
-        if (semanticsNode.textSelectionBase != -1 && semanticsNode.textSelectionExtent != -1) {
-          result.setTextSelection(
-              semanticsNode.textSelectionBase, semanticsNode.textSelectionExtent);
-        }
-        // Text fields will always be created as a live region when they have input focus,
-        // so that updates to the label trigger polite announcements. This makes it easy to
-        // follow a11y guidelines for text fields on Android.
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2
-            && accessibilityFocusedSemanticsNode != null
-            && accessibilityFocusedSemanticsNode.id == virtualViewId) {
-          result.setLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        }
+      result.setEditable(!semanticsNode.hasFlag(Flag.IS_READ_ONLY));
+      if (semanticsNode.textSelectionBase != -1 && semanticsNode.textSelectionExtent != -1) {
+        result.setTextSelection(semanticsNode.textSelectionBase, semanticsNode.textSelectionExtent);
+      }
+      // Text fields will always be created as a live region when they have input focus,
+      // so that updates to the label trigger polite announcements. This makes it easy to
+      // follow a11y guidelines for text fields on Android.
+      if (accessibilityFocusedSemanticsNode != null
+          && accessibilityFocusedSemanticsNode.id == virtualViewId) {
+        result.setLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
       }
 
       // Cursor movements
@@ -648,8 +719,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         granularities |= AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD;
       }
       result.setMovementGranularities(granularities);
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
-          && semanticsNode.maxValueLength >= 0) {
+      if (semanticsNode.maxValueLength >= 0) {
         // Account for the fact that Flutter is counting Unicode scalar values and Android
         // is counting UTF16 words.
         final int length = semanticsNode.value == null ? 0 : semanticsNode.value.length();
@@ -661,26 +731,21 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
     // These are non-ops on older devices. Attempting to interact with the text will cause Talkback
     // to read the contents of the text box instead.
-    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2) {
-      if (semanticsNode.hasAction(Action.SET_SELECTION)) {
-        result.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
-      }
-      if (semanticsNode.hasAction(Action.COPY)) {
-        result.addAction(AccessibilityNodeInfo.ACTION_COPY);
-      }
-      if (semanticsNode.hasAction(Action.CUT)) {
-        result.addAction(AccessibilityNodeInfo.ACTION_CUT);
-      }
-      if (semanticsNode.hasAction(Action.PASTE)) {
-        result.addAction(AccessibilityNodeInfo.ACTION_PASTE);
-      }
+    if (semanticsNode.hasAction(Action.SET_SELECTION)) {
+      result.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
+    }
+    if (semanticsNode.hasAction(Action.COPY)) {
+      result.addAction(AccessibilityNodeInfo.ACTION_COPY);
+    }
+    if (semanticsNode.hasAction(Action.CUT)) {
+      result.addAction(AccessibilityNodeInfo.ACTION_CUT);
+    }
+    if (semanticsNode.hasAction(Action.PASTE)) {
+      result.addAction(AccessibilityNodeInfo.ACTION_PASTE);
     }
 
-    // Set text API isn't available until API 21.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      if (semanticsNode.hasAction(Action.SET_TEXT)) {
-        result.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
-      }
+    if (semanticsNode.hasAction(Action.SET_TEXT)) {
+      result.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
     }
 
     if (semanticsNode.hasFlag(Flag.IS_BUTTON) || semanticsNode.hasFlag(Flag.IS_LINK)) {
@@ -691,8 +756,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       // TODO(jonahwilliams): Figure out a way conform to the expected id from TalkBack's
       // CustomLabelManager. talkback/src/main/java/labeling/CustomLabelManager.java#L525
     }
-    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2
-        && semanticsNode.hasAction(Action.DISMISS)) {
+    if (semanticsNode.hasAction(Action.DISMISS)) {
       result.setDismissable(true);
       result.addAction(AccessibilityNodeInfo.ACTION_DISMISS);
     }
@@ -709,8 +773,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       result.setParent(rootAccessibilityView);
     }
 
-    if (semanticsNode.previousNodeId != -1
-        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+    if (semanticsNode.previousNodeId != -1 && Build.VERSION.SDK_INT >= API_LEVELS.API_22) {
       result.setTraversalAfter(rootAccessibilityView, semanticsNode.previousNodeId);
     }
 
@@ -730,7 +793,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         !semanticsNode.hasFlag(Flag.HAS_ENABLED_STATE) || semanticsNode.hasFlag(Flag.IS_ENABLED));
 
     if (semanticsNode.hasAction(Action.TAP)) {
-      if (Build.VERSION.SDK_INT >= 21 && semanticsNode.onTapOverride != null) {
+      if (semanticsNode.onTapOverride != null) {
         result.addAction(
             new AccessibilityNodeInfo.AccessibilityAction(
                 AccessibilityNodeInfo.ACTION_CLICK, semanticsNode.onTapOverride.hint));
@@ -739,9 +802,18 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         result.addAction(AccessibilityNodeInfo.ACTION_CLICK);
         result.setClickable(true);
       }
+    } else {
+      // Prevent Slider to receive a regular tap which will change the value.
+      //
+      // This is needed because it causes slider to select to middle if it
+      // doesn't have a semantics tap.
+      if (semanticsNode.hasFlag(Flag.IS_SLIDER)) {
+        result.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+        result.setClickable(true);
+      }
     }
     if (semanticsNode.hasAction(Action.LONG_PRESS)) {
-      if (Build.VERSION.SDK_INT >= 21 && semanticsNode.onLongPressOverride != null) {
+      if (semanticsNode.onLongPressOverride != null) {
         result.addAction(
             new AccessibilityNodeInfo.AccessibilityAction(
                 AccessibilityNodeInfo.ACTION_LONG_CLICK, semanticsNode.onLongPressOverride.hint));
@@ -774,8 +846,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       if (semanticsNode.hasFlag(Flag.HAS_IMPLICIT_SCROLLING)) {
         if (semanticsNode.hasAction(Action.SCROLL_LEFT)
             || semanticsNode.hasAction(Action.SCROLL_RIGHT)) {
-          if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT
-              && shouldSetCollectionInfo(semanticsNode)) {
+          if (shouldSetCollectionInfo(semanticsNode)) {
             result.setCollectionInfo(
                 AccessibilityNodeInfo.CollectionInfo.obtain(
                     0, // rows
@@ -786,8 +857,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
             result.setClassName("android.widget.HorizontalScrollView");
           }
         } else {
-          if (Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2
-              && shouldSetCollectionInfo(semanticsNode)) {
+          if (shouldSetCollectionInfo(semanticsNode)) {
             result.setCollectionInfo(
                 AccessibilityNodeInfo.CollectionInfo.obtain(
                     semanticsNode.scrollChildren, // rows
@@ -822,18 +892,20 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         result.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
       }
     }
-    if (semanticsNode.hasFlag(Flag.IS_LIVE_REGION)
-        && Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2) {
+    if (semanticsNode.hasFlag(Flag.IS_LIVE_REGION)) {
       result.setLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
     }
 
     // Scopes routes are not focusable, only need to set the content
     // for non-scopes-routes semantics nodes.
     if (semanticsNode.hasFlag(Flag.IS_TEXT_FIELD)) {
-      result.setText(semanticsNode.getValueLabelHint());
+      result.setText(semanticsNode.getValue());
+      if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
+        result.setHintText(semanticsNode.getTextFieldHint());
+      }
     } else if (!semanticsNode.hasFlag(Flag.SCOPES_ROUTE)) {
       CharSequence content = semanticsNode.getValueLabelHint();
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+      if (Build.VERSION.SDK_INT < API_LEVELS.API_28) {
         if (semanticsNode.tooltip != null) {
           // For backward compatibility with Flutter SDK before Android API
           // level 28, the tooltip is appended at the end of content description.
@@ -846,7 +918,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       }
     }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
       if (semanticsNode.tooltip != null) {
         result.setTooltipText(semanticsNode.tooltip);
       }
@@ -872,7 +944,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     result.setSelected(semanticsNode.hasFlag(Flag.IS_SELECTED));
 
     // Heading support
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
       result.setHeading(semanticsNode.hasFlag(Flag.IS_HEADER));
     }
 
@@ -885,12 +957,10 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     }
 
     // Actions on the local context menu
-    if (Build.VERSION.SDK_INT >= 21) {
-      if (semanticsNode.customAccessibilityActions != null) {
-        for (CustomAccessibilityAction action : semanticsNode.customAccessibilityActions) {
-          result.addAction(
-              new AccessibilityNodeInfo.AccessibilityAction(action.resourceId, action.label));
-        }
+    if (semanticsNode.customAccessibilityActions != null) {
+      for (CustomAccessibilityAction action : semanticsNode.customAccessibilityActions) {
+        result.addAction(
+            new AccessibilityNodeInfo.AccessibilityAction(action.resourceId, action.label));
       }
     }
 
@@ -902,8 +972,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         View embeddedView =
             platformViewsAccessibilityDelegate.getPlatformViewById(child.platformViewId);
 
-        // Add the embedded view as a child of the current accessibility node if it's using
-        // hybrid composition.
+        // Add the embedded view as a child of the current accessibility node if it's not
+        // using a virtual display.
         //
         // In this case, the view is in the Activity's view hierarchy, so it doesn't need to be
         // mirrored.
@@ -917,6 +987,19 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       result.addChild(rootAccessibilityView, child.id);
     }
     return result;
+  }
+
+  private boolean isImportant(SemanticsNode node) {
+    if (node.hasFlag(Flag.SCOPES_ROUTE)) {
+      return false;
+    }
+
+    if (node.getValueLabelHint() != null) {
+      return true;
+    }
+
+    // Return true if the node has had any user action (not including system actions)
+    return (node.actions & ~systemAction) != 0;
   }
 
   /**
@@ -1019,26 +1102,10 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
       case AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY:
         {
-          // Text selection APIs aren't available until API 18. We can't handle the case here so
-          // return false
-          // instead. It's extremely unlikely that this case would ever be triggered in the first
-          // place in API <
-          // 18.
-          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) {
-            return false;
-          }
           return performCursorMoveAction(semanticsNode, virtualViewId, arguments, false);
         }
       case AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY:
         {
-          // Text selection APIs aren't available until API 18. We can't handle the case here so
-          // return false
-          // instead. It's extremely unlikely that this case would ever be triggered in the first
-          // place in API <
-          // 18.
-          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) {
-            return false;
-          }
           return performCursorMoveAction(semanticsNode, virtualViewId, arguments, true);
         }
       case AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS:
@@ -1074,6 +1141,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
           accessibilityChannel.dispatchSemanticsAction(
               virtualViewId, Action.DID_GAIN_ACCESSIBILITY_FOCUS);
+
+          HashMap<String, Object> message = new HashMap<>();
+          message.put("type", "didGainFocus");
+          message.put("nodeId", semanticsNode.id);
+          accessibilityChannel.channel.send(message);
+
           sendAccessibilityEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
 
           if (semanticsNode.hasAction(Action.INCREASE)
@@ -1091,14 +1164,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
       case AccessibilityNodeInfo.ACTION_SET_SELECTION:
         {
-          // Text selection APIs aren't available until API 18. We can't handle the case here so
-          // return false
-          // instead. It's extremely unlikely that this case would ever be triggered in the first
-          // place in API <
-          // 18.
-          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) {
-            return false;
-          }
           final Map<String, Integer> selection = new HashMap<>();
           final boolean hasSelection =
               arguments != null
@@ -1149,12 +1214,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
       case AccessibilityNodeInfo.ACTION_SET_TEXT:
         {
-          // Set text APIs aren't available until API 21. We can't handle the case here so
-          // return false instead. It's extremely unlikely that this case would ever be
-          // triggered in the first place in API < 21.
-          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            return false;
-          }
           return performSetText(semanticsNode, virtualViewId, arguments);
         }
       default:
@@ -1174,8 +1233,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * Handles the responsibilities of {@link #performAction(int, int, Bundle)} for the specific
    * scenario of cursor movement.
    */
-  @TargetApi(18)
-  @RequiresApi(18)
   private boolean performCursorMoveAction(
       @NonNull SemanticsNode semanticsNode,
       int virtualViewId,
@@ -1312,8 +1369,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * Handles the responsibilities of {@link #performAction(int, int, Bundle)} for the specific
    * scenario of cursor movement.
    */
-  @TargetApi(21)
-  @RequiresApi(21)
   private boolean performSetText(SemanticsNode node, int virtualViewId, @NonNull Bundle arguments) {
     String newText = "";
     if (arguments != null
@@ -1321,9 +1376,10 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       newText = arguments.getString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
     }
     accessibilityChannel.dispatchSemanticsAction(virtualViewId, Action.SET_TEXT, newText);
-    // The voice access expects the semantics node to update immediately. We update the semantics
+    // The voice access expects the semantics node to update immediately. Update the semantics
     // node based on prediction. If the result is incorrect, it will be updated in the next frame.
     node.value = newText;
+    node.valueAttributes = null;
     return true;
   }
 
@@ -1429,6 +1485,24 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * View#onHoverEvent(MotionEvent)}.
    */
   public boolean onAccessibilityHoverEvent(MotionEvent event) {
+    return onAccessibilityHoverEvent(event, false);
+  }
+
+  /**
+   * A hover {@link MotionEvent} has occurred in the {@code View} that corresponds to this {@code
+   * AccessibilityBridge}.
+   *
+   * <p>If {@code ignorePlatformViews} is true, if hit testing for the event finds a platform view,
+   * the event will not be handled. This is useful when handling accessibility events for views
+   * overlaying platform views. See {@code PlatformOverlayView} for details.
+   *
+   * <p>This method returns true if Flutter's accessibility system handled the hover event, false
+   * otherwise.
+   *
+   * <p>This method should be invoked from the corresponding {@code View}'s {@link
+   * View#onHoverEvent(MotionEvent)}.
+   */
+  public boolean onAccessibilityHoverEvent(MotionEvent event, boolean ignorePlatformViews) {
     if (!accessibilityManager.isTouchExplorationEnabled()) {
       return false;
     }
@@ -1437,17 +1511,21 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     }
 
     SemanticsNode semanticsNodeUnderCursor =
-        getRootSemanticsNode().hitTest(new float[] {event.getX(), event.getY(), 0, 1});
+        getRootSemanticsNode()
+            .hitTest(new float[] {event.getX(), event.getY(), 0, 1}, ignorePlatformViews);
     // semanticsNodeUnderCursor can be null when hovering over non-flutter UI such as
     // the Android navigation bar due to hitTest() bounds checking.
     if (semanticsNodeUnderCursor != null && semanticsNodeUnderCursor.platformViewId != -1) {
+      if (ignorePlatformViews) {
+        return false;
+      }
       return accessibilityViewEmbedder.onAccessibilityHoverEvent(
           semanticsNodeUnderCursor.id, event);
     }
 
     if (event.getAction() == MotionEvent.ACTION_HOVER_ENTER
         || event.getAction() == MotionEvent.ACTION_HOVER_MOVE) {
-      handleTouchExploration(event.getX(), event.getY());
+      handleTouchExploration(event.getX(), event.getY(), ignorePlatformViews);
     } else if (event.getAction() == MotionEvent.ACTION_HOVER_EXIT) {
       onTouchExplorationExit();
     } else {
@@ -1480,12 +1558,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * a {@link AccessibilityEvent#TYPE_VIEW_HOVER_ENTER} event for the new hover node, followed by a
    * {@link AccessibilityEvent#TYPE_VIEW_HOVER_EXIT} event for the old hover node.
    */
-  private void handleTouchExploration(float x, float y) {
+  private void handleTouchExploration(float x, float y, boolean ignorePlatformViews) {
     if (flutterSemanticsTree.isEmpty()) {
       return;
     }
     SemanticsNode semanticsNodeUnderCursor =
-        getRootSemanticsNode().hitTest(new float[] {x, y, 0, 1});
+        getRootSemanticsNode().hitTest(new float[] {x, y, 0, 1}, ignorePlatformViews);
     if (semanticsNodeUnderCursor != hoveredObject) {
       // sending ENTER before EXIT is how Android wants it
       if (semanticsNodeUnderCursor != null) {
@@ -1564,13 +1642,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       // In Android devices API 23 and above, the system nav bar can be placed on the left side
       // of the screen in landscape mode. We must handle the translation ourselves for the
       // a11y nodes.
-      if (Build.VERSION.SDK_INT >= 23) {
+      if (Build.VERSION.SDK_INT >= API_LEVELS.API_23) {
         boolean needsToApplyLeftCutoutInset = true;
         // In Android devices API 28 and above, the `layoutInDisplayCutoutMode` window attribute
         // can be set to allow overlapping content within the cutout area. Query the attribute
         // to figure out whether the content overlaps with the cutout and decide whether to
         // apply cutout inset.
-        if (Build.VERSION.SDK_INT >= 28) {
+        if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
           needsToApplyLeftCutoutInset = doesLayoutInDisplayCutoutModeRequireLeftInset();
         }
 
@@ -1802,7 +1880,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * <p>The given {@code viewId} may either belong to {@link #rootAccessibilityView}, or any Flutter
    * {@link SemanticsNode}.
    */
-  private void sendAccessibilityEvent(int viewId, int eventType) {
+  @VisibleForTesting
+  public void sendAccessibilityEvent(int viewId, int eventType) {
     if (!accessibilityManager.isEnabled()) {
       return;
     }
@@ -1851,7 +1930,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       // next.
       routeName = " ";
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    if (Build.VERSION.SDK_INT >= API_LEVELS.API_28) {
       setAccessibilityPaneTitle(routeName);
     } else {
       AccessibilityEvent event =
@@ -1861,8 +1940,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     }
   }
 
-  @TargetApi(28)
-  @RequiresApi(28)
+  @TargetApi(API_LEVELS.API_28)
+  @RequiresApi(API_LEVELS.API_28)
   private void setAccessibilityPaneTitle(String title) {
     rootAccessibilityView.setAccessibilityPaneTitle(title);
   }
@@ -1880,9 +1959,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   private void sendWindowContentChangeEvent(int virtualViewId) {
     AccessibilityEvent event =
         obtainAccessibilityEvent(virtualViewId, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
-    }
+    event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
     sendAccessibilityEvent(event);
   }
 
@@ -1895,10 +1972,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * invoked to create an {@link AccessibilityEvent} for the {@link #rootAccessibilityView}.
    */
   private AccessibilityEvent obtainAccessibilityEvent(int virtualViewId, int eventType) {
-    AccessibilityEvent event = AccessibilityEvent.obtain(eventType);
+    AccessibilityEvent event = obtainAccessibilityEvent(eventType);
     event.setPackageName(rootAccessibilityView.getContext().getPackageName());
     event.setSource(rootAccessibilityView, virtualViewId);
     return event;
+  }
+
+  @VisibleForTesting
+  public AccessibilityEvent obtainAccessibilityEvent(int eventType) {
+    return AccessibilityEvent.obtain(eventType);
   }
 
   /**
@@ -1907,8 +1989,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    *
    * <p>The {@code layoutInDisplayCutoutMode} is added after API level 28.
    */
-  @TargetApi(28)
-  @RequiresApi(28)
+  @TargetApi(API_LEVELS.API_28)
+  @RequiresApi(API_LEVELS.API_28)
   private boolean doesLayoutInDisplayCutoutModeRequireLeftInset() {
     Context context = rootAccessibilityView.getContext();
     Activity activity = ViewUtils.getActivity(context);
@@ -1928,8 +2010,6 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * Hook called just before a {@link SemanticsNode} is removed from the Android cache of Flutter's
    * semantics tree.
    */
-  @TargetApi(19)
-  @RequiresApi(19)
   private void willRemoveSemanticsNode(SemanticsNode semanticsNodeToBeRemoved) {
     if (BuildConfig.DEBUG) {
       if (!flutterSemanticsTree.containsKey(semanticsNodeToBeRemoved.id)) {
@@ -1958,9 +2038,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       embeddedAccessibilityFocusedNodeId = null;
     }
 
-    if (semanticsNodeToBeRemoved.platformViewId != -1
-        && !platformViewsAccessibilityDelegate.usesVirtualDisplay(
-            semanticsNodeToBeRemoved.platformViewId)) {
+    if (semanticsNodeToBeRemoved.platformViewId != -1) {
       View embeddedView =
           platformViewsAccessibilityDelegate.getPlatformViewById(
               semanticsNodeToBeRemoved.platformViewId);
@@ -2041,7 +2119,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     DISMISS(1 << 18),
     MOVE_CURSOR_FORWARD_BY_WORD(1 << 19),
     MOVE_CURSOR_BACKWARD_BY_WORD(1 << 20),
-    SET_TEXT(1 << 21);
+    SET_TEXT(1 << 21),
+    FOCUS(1 << 22);
 
     public final int value;
 
@@ -2049,6 +2128,14 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       this.value = value;
     }
   }
+
+  // Actions that are triggered by Android OS, as opposed to user-triggered actions.
+  //
+  // This int is intended to be use in a bitwise comparison.
+  static int systemAction =
+      Action.DID_GAIN_ACCESSIBILITY_FOCUS.value
+          & Action.DID_LOSE_ACCESSIBILITY_FOCUS.value
+          & Action.SHOW_ON_SCREEN.value;
 
   // Must match SemanticsFlag in semantics.dart
   // https://github.com/flutter/engine/blob/main/lib/ui/semantics.dart
@@ -2072,13 +2159,16 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     HAS_TOGGLED_STATE(1 << 16),
     IS_TOGGLED(1 << 17),
     HAS_IMPLICIT_SCROLLING(1 << 18),
-    // The Dart API defines the following flag but it isn't used in Android.
-    // IS_MULTILINE(1 << 19);
+    IS_MULTILINE(1 << 19),
     IS_READ_ONLY(1 << 20),
     IS_FOCUSABLE(1 << 21),
     IS_LINK(1 << 22),
     IS_SLIDER(1 << 23),
-    IS_KEYBOARD_KEY(1 << 24);
+    IS_KEYBOARD_KEY(1 << 24),
+    IS_CHECK_STATE_MIXED(1 << 25),
+    HAS_EXPANDED_STATE(1 << 26),
+    IS_EXPANDED(1 << 27),
+    HAS_SELECTED_STATE(1 << 28);
 
     final int value;
 
@@ -2091,7 +2181,11 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   private enum AccessibilityFeature {
     ACCESSIBLE_NAVIGATION(1 << 0),
     INVERT_COLORS(1 << 1), // NOT SUPPORTED
-    DISABLE_ANIMATIONS(1 << 2);
+    DISABLE_ANIMATIONS(1 << 2),
+    BOLD_TEXT(1 << 3), // NOT SUPPORTED
+    REDUCE_MOTION(1 << 4), // NOT SUPPORTED
+    HIGH_CONTRAST(1 << 5), // NOT SUPPORTED
+    ON_OFF_SWITCH_LABELS(1 << 6); // NOT SUPPORTED
 
     final int value;
 
@@ -2161,7 +2255,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   // When adding a new StringAttributeType, the classes in these file must be
   // updated as well.
   //  * engine/src/flutter/lib/ui/semantics.dart
-  //  * engine/src/flutter/lib/web_ui/lib/src/ui/semantics.dart
+  //  * engine/src/flutter/lib/web_ui/lib/semantics.dart
   //  * engine/src/flutter/lib/ui/semantics/string_attribute.h
 
   private enum StringAttributeType {
@@ -2216,6 +2310,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     private float scrollPosition;
     private float scrollExtentMax;
     private float scrollExtentMin;
+    private String identifier;
     private String label;
     private List<StringAttribute> labelAttributes;
     private String value;
@@ -2229,7 +2324,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
     // The textual description of the backing widget's tooltip.
     //
-    // The tooltip is attached through AccessibilityNodInfo.setTooltipText if
+    // The tooltip is attached through AccessibilityNodeInfo.setTooltipText if
     // API level >= 28; otherwise, this is attached to the end of content description.
     @Nullable private String tooltip;
 
@@ -2348,6 +2443,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
             indent
                 + "SemanticsNode id="
                 + id
+                + " identifier="
+                + identifier
                 + " label="
                 + label
                 + " actions="
@@ -2411,6 +2508,10 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       scrollExtentMin = buffer.getFloat();
 
       int stringIndex = buffer.getInt();
+
+      identifier = stringIndex == -1 ? null : strings[stringIndex];
+      stringIndex = buffer.getInt();
+
       label = stringIndex == -1 ? null : strings[stringIndex];
 
       labelAttributes = getStringAttributesFromBuffer(buffer, stringAttributeArgs);
@@ -2558,7 +2659,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       return globalRect;
     }
 
-    private SemanticsNode hitTest(float[] point) {
+    /**
+     * Hit tests {@code point} to find the deepest focusable node in the node tree at that point.
+     *
+     * @param point The point to hit test against this node.
+     * @param stopAtPlatformView Whether to return a platform view if found, regardless of whether
+     *     or not it is focusable.
+     * @return The found node, or null if no relevant node was found at the given point.
+     */
+    private SemanticsNode hitTest(float[] point, boolean stopAtPlatformView) {
       final float w = point[3];
       final float x = point[0] / w;
       final float y = point[1] / w;
@@ -2570,12 +2679,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
         child.ensureInverseTransform();
         Matrix.multiplyMV(transformedPoint, 0, child.inverseTransform, 0, point, 0);
-        final SemanticsNode result = child.hitTest(transformedPoint);
+        final SemanticsNode result = child.hitTest(transformedPoint, stopAtPlatformView);
         if (result != null) {
           return result;
         }
       }
-      return isFocusable() ? this : null;
+      final boolean foundPlatformView = stopAtPlatformView && platformViewId != -1;
+      return isFocusable() || foundPlatformView ? this : null;
     }
 
     // TODO(goderbauer): This should be decided by the framework once we have more information
@@ -2636,6 +2746,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       if (forceUpdate) {
         if (globalTransform == null) {
           globalTransform = new float[16];
+        }
+        if (transform == null) {
+          if (BuildConfig.DEBUG) {
+            Log.e(TAG, "transform has not been initialized for id = " + id);
+            accessibilityBridge.getRootSemanticsNode().log("Semantics tree:", true);
+          }
+          transform = new float[16];
         }
         Matrix.multiplyMM(globalTransform, 0, ancestorTransform, 0, transform, 0);
 
@@ -2709,18 +2826,20 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       return Math.max(a, Math.max(b, Math.max(c, d)));
     }
 
+    private CharSequence getValue() {
+      return createSpannableString(value, valueAttributes);
+    }
+
+    private CharSequence getLabel() {
+      return createSpannableString(label, labelAttributes);
+    }
+
+    private CharSequence getHint() {
+      return createSpannableString(hint, hintAttributes);
+    }
+
     private CharSequence getValueLabelHint() {
-      CharSequence[] array;
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-        array = new CharSequence[] {value, label, hint};
-      } else {
-        array =
-            new CharSequence[] {
-              createSpannableString(value, valueAttributes),
-              createSpannableString(label, labelAttributes),
-              createSpannableString(hint, hintAttributes),
-            };
-      }
+      CharSequence[] array = new CharSequence[] {getValue(), getLabel(), getHint()};
       CharSequence result = null;
       for (CharSequence word : array) {
         if (word != null && word.length() > 0) {
@@ -2734,8 +2853,21 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       return result;
     }
 
-    @TargetApi(21)
-    @RequiresApi(21)
+    private CharSequence getTextFieldHint() {
+      CharSequence[] array = new CharSequence[] {getLabel(), getHint()};
+      CharSequence result = null;
+      for (CharSequence word : array) {
+        if (word != null && word.length() > 0) {
+          if (result == null || result.length() == 0) {
+            result = word;
+          } else {
+            result = TextUtils.concat(result, ", ", word);
+          }
+        }
+      }
+      return result;
+    }
+
     private SpannableString createSpannableString(String string, List<StringAttribute> attributes) {
       if (string == null) {
         return null;
@@ -2781,6 +2913,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * @param eventOrigin the view in the embedded view's hierarchy that sent the event.
    * @return True if the event was sent.
    */
+  // AccessibilityEvent has many irrelevant cases that would be confusing to list.
+  @SuppressLint("SwitchIntDef")
   public boolean externalViewRequestSendAccessibilityEvent(
       View embeddedView, View eventOrigin, AccessibilityEvent event) {
     if (!accessibilityViewEmbedder.requestSendAccessibilityEvent(

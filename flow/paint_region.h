@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef FLUTTER_FLOW_PAINT_REGION_H_
+#define FLUTTER_FLOW_PAINT_REGION_H_
+
+#include <memory>
+#include <utility>
 #include <vector>
 #include "flutter/fml/logging.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -27,7 +32,7 @@ class PaintRegion {
               size_t to,
               bool has_readback,
               bool has_texture)
-      : rects_(rects),
+      : rects_(std::move(rects)),
         from_(from),
         to_(to),
         has_readback_(has_readback),
@@ -65,3 +70,5 @@ class PaintRegion {
 };
 
 }  // namespace flutter
+
+#endif  // FLUTTER_FLOW_PAINT_REGION_H_

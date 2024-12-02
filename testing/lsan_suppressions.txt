@@ -51,7 +51,7 @@ leak:RefCountedTest_DebugChecks_Test::TestBody
 leak:*flutter/shell/platform/linux/testing/mock_engine.cc
 
 # TODO(bdero): Fix FL leaks: https://github.com/flutter/flutter/issues/90155
-leak:*flutter/shell/platform/linux/fl_keyboard_manager_test.cc*
+leak:*flutter/shell/platform/linux/fl_keyboard_handler_test.cc*
 leak:*flutter/shell/platform/linux/fl_key_channel_responder_test.cc*
 leak:*flutter/shell/platform/linux/fl_basic_message_channel_test.cc*
 leak:fl_message_codec_decode_message
@@ -63,3 +63,11 @@ leak:fl_message_codec_decode_message
 # At the time of writing, this only amounts to 4 allocations totaling 512 bytes
 # worth of leaks.
 leak:g_realloc
+
+
+# ANGLE's egl impelementation uses annotations that our LSAN setup does
+# not respect. Ignore leaks from egl::*
+leak:egl::*
+
+# False positives in libfontconfig. http://crbug.com/39050
+leak:libfontconfig

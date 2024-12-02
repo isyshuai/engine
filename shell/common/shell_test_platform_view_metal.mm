@@ -4,66 +4,57 @@
 
 #include "flutter/shell/common/shell_test_platform_view_metal.h"
 
-#import <Metal/Metal.h>
+#include <utility>
 
-#include "flutter/fml/platform/darwin/scoped_nsobject.h"
-#include "flutter/shell/gpu/gpu_surface_metal.h"
-#include "flutter/shell/platform/darwin/graphics/FlutterDarwinContextMetal.h"
+#include "flutter/shell/gpu/gpu_surface_metal_impeller.h"
+#include "flutter/shell/gpu/gpu_surface_metal_skia.h"
 
-namespace flutter {
-namespace testing {
+FLUTTER_ASSERT_ARC
 
-static fml::scoped_nsprotocol<id<MTLTexture>> CreateOffscreenTexture(id<MTLDevice> device) {
+namespace flutter::testing {
+
+std::unique_ptr<ShellTestPlatformView> ShellTestPlatformView::CreateMetal(
+    PlatformView::Delegate& delegate,
+    const TaskRunners& task_runners,
+    const std::shared_ptr<ShellTestVsyncClock>& vsync_clock,
+    const CreateVsyncWaiter& create_vsync_waiter,
+    const std::shared_ptr<ShellTestExternalViewEmbedder>& shell_test_external_view_embedder,
+    const std::shared_ptr<const fml::SyncSwitch>& is_gpu_disabled_sync_switch) {
+  return std::make_unique<ShellTestPlatformViewMetal>(
+      delegate, task_runners, vsync_clock, create_vsync_waiter, shell_test_external_view_embedder,
+      is_gpu_disabled_sync_switch);
+}
+
+ShellTestPlatformViewMetal::ShellTestPlatformViewMetal(
+    PlatformView::Delegate& delegate,
+    const TaskRunners& task_runners,
+    std::shared_ptr<ShellTestVsyncClock> vsync_clock,
+    CreateVsyncWaiter create_vsync_waiter,
+    std::shared_ptr<ShellTestExternalViewEmbedder> shell_test_external_view_embedder,
+    const std::shared_ptr<const fml::SyncSwitch>& is_gpu_disabled_sync_switch)
+    : ShellTestPlatformView(delegate, task_runners),
+      GPUSurfaceMetalDelegate(MTLRenderTargetType::kMTLTexture),
+      create_vsync_waiter_(std::move(create_vsync_waiter)),
+      vsync_clock_(std::move(vsync_clock)),
+      shell_test_external_view_embedder_(std::move(shell_test_external_view_embedder)) {
+  id<MTLDevice> device = nil;
+  if (GetSettings().enable_impeller) {
+    impeller_context_ =
+        [[FlutterDarwinContextMetalImpeller alloc] init:is_gpu_disabled_sync_switch];
+    FML_CHECK(impeller_context_.context);
+    device = impeller_context_.context->GetMTLDevice();
+  } else {
+    skia_context_ = [[FlutterDarwinContextMetalSkia alloc] initWithDefaultMTLDevice];
+    FML_CHECK(skia_context_.mainContext);
+    device = skia_context_.device;
+  }
   auto descriptor =
       [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                          width:800
                                                         height:600
                                                      mipmapped:NO];
   descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-  return fml::scoped_nsprotocol<id<MTLTexture>>{[device newTextureWithDescriptor:descriptor]};
-}
-
-// This is out of the header so that shell_test_platform_view_metal.h can be included in
-// non-Objective-C TUs.
-class DarwinContextMetal {
- public:
-  DarwinContextMetal()
-      : context_([[FlutterDarwinContextMetal alloc] initWithDefaultMTLDevice]),
-        offscreen_texture_(CreateOffscreenTexture([context_.get() device])) {}
-
-  ~DarwinContextMetal() = default;
-
-  fml::scoped_nsobject<FlutterDarwinContextMetal> context() const { return context_; }
-
-  fml::scoped_nsprotocol<id<MTLTexture>> offscreen_texture() const { return offscreen_texture_; }
-
-  GPUMTLTextureInfo offscreen_texture_info() const {
-    GPUMTLTextureInfo info = {};
-    info.texture_id = 0;
-    info.texture = reinterpret_cast<GPUMTLTextureHandle>(offscreen_texture_.get());
-    return info;
-  }
-
- private:
-  const fml::scoped_nsobject<FlutterDarwinContextMetal> context_;
-  const fml::scoped_nsprotocol<id<MTLTexture>> offscreen_texture_;
-
-  FML_DISALLOW_COPY_AND_ASSIGN(DarwinContextMetal);
-};
-
-ShellTestPlatformViewMetal::ShellTestPlatformViewMetal(
-    PlatformView::Delegate& delegate,
-    TaskRunners task_runners,
-    std::shared_ptr<ShellTestVsyncClock> vsync_clock,
-    CreateVsyncWaiter create_vsync_waiter,
-    std::shared_ptr<ShellTestExternalViewEmbedder> shell_test_external_view_embedder)
-    : ShellTestPlatformView(delegate, std::move(task_runners)),
-      GPUSurfaceMetalDelegate(MTLRenderTargetType::kMTLTexture),
-      metal_context_(std::make_unique<DarwinContextMetal>()),
-      create_vsync_waiter_(std::move(create_vsync_waiter)),
-      vsync_clock_(vsync_clock),
-      shell_test_external_view_embedder_(shell_test_external_view_embedder) {
-  FML_CHECK([metal_context_->context() mainContext] != nil);
+  offscreen_texture_ = [device newTextureWithDescriptor:descriptor];
 }
 
 ShellTestPlatformViewMetal::~ShellTestPlatformViewMetal() = default;
@@ -91,7 +82,17 @@ PointerDataDispatcherMaker ShellTestPlatformViewMetal::GetDispatcherMaker() {
 
 // |PlatformView|
 std::unique_ptr<Surface> ShellTestPlatformViewMetal::CreateRenderingSurface() {
-  return std::make_unique<GPUSurfaceMetal>(this, [metal_context_->context() mainContext]);
+  if (GetSettings().enable_impeller) {
+    auto context = impeller_context_.context;
+    return std::make_unique<GPUSurfaceMetalImpeller>(
+        this, std::make_shared<impeller::AiksContext>(context, nullptr));
+  }
+  return std::make_unique<GPUSurfaceMetalSkia>(this, skia_context_.mainContext);
+}
+
+// |PlatformView|
+std::shared_ptr<impeller::Context> ShellTestPlatformViewMetal::GetImpellerContext() const {
+  return impeller_context_.context;
 }
 
 // |GPUSurfaceMetalDelegate|
@@ -110,7 +111,10 @@ bool ShellTestPlatformViewMetal::PresentDrawable(GrMTLHandle drawable) const {
 
 // |GPUSurfaceMetalDelegate|
 GPUMTLTextureInfo ShellTestPlatformViewMetal::GetMTLTexture(const SkISize& frame_info) const {
-  return metal_context_->offscreen_texture_info();
+  return {
+      .texture_id = 0,
+      .texture = (__bridge GPUMTLTextureHandle)offscreen_texture_,
+  };
 }
 
 // |GPUSurfaceMetalDelegate|
@@ -119,5 +123,4 @@ bool ShellTestPlatformViewMetal::PresentTexture(GPUMTLTextureInfo texture) const
   return true;
 }
 
-}  // namespace testing
-}  // namespace flutter
+}  // namespace flutter::testing

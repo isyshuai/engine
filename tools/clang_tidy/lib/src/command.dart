@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:convert' show utf8, LineSplitter;
+import 'dart:convert' show LineSplitter, utf8;
 import 'dart:io' as io;
 
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as path;
 import 'package:process_runner/process_runner.dart';
+
+import 'options.dart';
 
 /// The url prefix for issues that must be attached to the directive in files
 /// that disables linting.
@@ -53,8 +55,11 @@ class Command {
   /// The file on which the command operates.
   late final String filePath;
 
-  static final RegExp _pathRegex = RegExp(r'\S*clang/bin/clang');
-  static final RegExp _argRegex = RegExp(r'-MF \S*');
+  static final RegExp _pathRegex = RegExp(r'\S*clang/bin/clang(\+\+)?');
+  static final RegExp _argRegex = RegExp(r'-MF\s+\S+\s+');
+
+  // Filter out any extra commands that were appended to the compile command.
+  static final RegExp _extraCommandRegex = RegExp(r'&&.*$');
 
   String? _tidyArgs;
 
@@ -62,8 +67,14 @@ class Command {
   String get tidyArgs {
     return _tidyArgs ??= (() {
       String result = command;
+      result = result.replaceAll(r'\s+', ' ');
+      // Remove everything that comes before the compiler command.
+      result = result.split(' ')
+                     .skipWhile((String s) => !_pathRegex.hasMatch(s))
+                     .join(' ');
       result = result.replaceAll(_pathRegex, '');
       result = result.replaceAll(_argRegex, '');
+      result = result.replaceAll(_extraCommandRegex, '');
       return result;
     })();
   }
@@ -75,7 +86,7 @@ class Command {
     return _tidyPath ??= _pathRegex.stringMatch(command)?.replaceAll(
       'clang/bin/clang',
       'clang/bin/clang-tidy',
-    ) ?? '';
+    ).replaceAll('clang-tidy++', 'clang-tidy') ?? '';
   }
 
   /// Whether this command operates on any of the files in `queries`.
@@ -129,22 +140,27 @@ class Command {
   }
 
   /// The job for the process runner for the lint needed for this command.
-  WorkerJob createLintJob(String? checks, bool fix) {
+  WorkerJob createLintJob(Options options) {
     final List<String> args = <String>[
       filePath,
-      if (checks != null)
-        checks,
-      if (fix) ...<String>[
+      '--warnings-as-errors=${options.warningsAsErrors ?? '*'}',
+      if (options.checks != null)
+        options.checks!,
+      if (options.fix) ...<String>[
         '--fix',
         '--format-style=file',
       ],
+      if (options.enableCheckProfile)
+        '--enable-check-profile',
       '--',
     ];
     args.addAll(tidyArgs.split(' '));
+    final String clangTidyPath = options.clangTidyPath?.path ?? tidyPath;
     return WorkerJob(
-      <String>[tidyPath, ...args],
+      <String>[clangTidyPath, ...args],
       workingDirectory: directory,
       name: 'clang-tidy on $filePath',
+      printOutput: options.verbose,
     );
   }
 }

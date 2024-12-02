@@ -12,6 +12,10 @@
 #include "flutter/shell/common/shell_test.h"
 #include "flutter/shell/common/thread_host.h"
 #include "flutter/testing/testing.h"
+#include "lib/ui/compositing/scene.h"
+
+// CREATE_NATIVE_ENTRY is leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
 
 namespace flutter {
 namespace testing {
@@ -56,7 +60,7 @@ TEST_F(ShellTest, SceneBuilderBuildAndSceneDisposeReleasesLayerStack) {
 
   auto validate_scene_has_no_layers =
       [message_latch, &retained_scene](Dart_NativeArguments args) {
-        EXPECT_FALSE(retained_scene->takeLayerTree());
+        EXPECT_FALSE(retained_scene->takeLayerTree(100, 100));
         retained_scene->Release();
         retained_scene = nullptr;
         message_latch->Signal();
@@ -79,8 +83,7 @@ TEST_F(ShellTest, SceneBuilderBuildAndSceneDisposeReleasesLayerStack) {
   AddNativeCallback("ValidateSceneHasNoLayers",
                     CREATE_NATIVE_ENTRY(validate_scene_has_no_layers));
 
-  std::unique_ptr<Shell> shell =
-      CreateShell(std::move(settings), std::move(task_runners));
+  std::unique_ptr<Shell> shell = CreateShell(settings, task_runners);
 
   ASSERT_TRUE(shell->IsSetup());
   auto configuration = RunConfiguration::InferFromSettings(settings);
@@ -91,7 +94,7 @@ TEST_F(ShellTest, SceneBuilderBuildAndSceneDisposeReleasesLayerStack) {
   });
 
   message_latch->Wait();
-  DestroyShell(std::move(shell), std::move(task_runners));
+  DestroyShell(std::move(shell), task_runners);
 }
 
 TEST_F(ShellTest, EngineLayerDisposeReleasesReference) {
@@ -139,8 +142,7 @@ TEST_F(ShellTest, EngineLayerDisposeReleasesReference) {
   AddNativeCallback("ValidateEngineLayerDispose",
                     CREATE_NATIVE_ENTRY(validate_engine_layer_dispose));
 
-  std::unique_ptr<Shell> shell =
-      CreateShell(std::move(settings), std::move(task_runners));
+  std::unique_ptr<Shell> shell = CreateShell(settings, task_runners);
 
   ASSERT_TRUE(shell->IsSetup());
   auto configuration = RunConfiguration::InferFromSettings(settings);
@@ -151,8 +153,10 @@ TEST_F(ShellTest, EngineLayerDisposeReleasesReference) {
   });
 
   message_latch->Wait();
-  DestroyShell(std::move(shell), std::move(task_runners));
+  DestroyShell(std::move(shell), task_runners);
 }
 
 }  // namespace testing
 }  // namespace flutter
+
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)
